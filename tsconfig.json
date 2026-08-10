@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+
+    // No baseUrl — it's deprecated in TS 5.9 and gone in 7.0. Without it, `paths` entries resolve
+    // relative to this file, which is why they need the leading "./". Matches the other two repos.
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  // scripts/ has to be in here too, or it silently isn't typechecked — `tsc --noEmit` passes by
+  // simply not looking at it, and the editor falls back to no config (hence "cannot find node:path").
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "drizzle.config.ts"]
+}

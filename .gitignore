@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# env — real values never get committed. the example is the only record of what's needed.
+.env
+.env.*
+!.env.example
+
+*.tsbuildinfo
+.DS_Store
