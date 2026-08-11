@@ -43,6 +43,13 @@
       "when": 1786135814469,
       "tag": "0005_identity_and_partners",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786445171596,
+      "tag": "0006_sparkling_mandrill",
+      "breakpoints": true
     }
   ]
 }

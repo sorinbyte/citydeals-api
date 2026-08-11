@@ -187,11 +187,170 @@ export type LeadStatus = "new" | "contacted" | "qualified" | "rejected";
   is_published filter. An unpublished venue is invisible to every client except this one, which is
   exactly when someone needs to look at it.
 */
-export type AdminVenue = VenueDetail & {
+/*
+  A deal as the admin editor needs it, which is strictly more than a member gets.
+
+  Two extras and both are load-bearing. `isActive` because the public projection filters deactivated
+  deals out entirely — without this an admin cannot see, let alone reactivate, an offer they just
+  switched off. `sortOrder` because it decides which three deals a card shows (TOP_DEALS_PER_CARD in
+  services/venues.ts), so it's a real editorial lever rather than an implementation detail.
+*/
+export type DealGender = "m" | "f";
+
+/*
+  A row in the admin venues table.
+
+  ⚠️ NOT VenueSummary. That one is the public catalogue shape — built for a card, so it carries a
+  photo, a rating, opening state and the top three deals, none of which a triage table wants. This
+  carries what you scan a list for: who owns it, how many offers it's running, and whether it's
+  live. Keeping them separate is what stops `partner` drifting into a public response.
+*/
+export type AdminVenueListItem = {
+  id: string;
+  slug: string;
+  name: string;
+  categoryKey: string;
+  area: string;
+  /* Null is a real state — venues exist before the company behind them does. */
+  partner: { id: string; companyName: string } | null;
+  /*
+    ACTIVE offers only. A deactivated one shows nowhere in the app, so counting it here would
+    overstate what the venue is actually running — which is the number this column exists to
+    answer.
+  */
+  activeDealCount: number;
+  isPublished: boolean;
+};
+
+/* What the admin list can be ordered by. Codes, not column names — the service decides how each
+   one maps to SQL, and `category` deliberately isn't alphabetical. */
+export type AdminVenueSort = "name" | "category" | "area" | "partner" | "offers" | "status";
+
+/*
+  Where a member is in their trial. Derived in SQL from two nullable timestamps, so no client works
+  it out from dates and no two clients disagree about what "expired" means.
+
+    none    — verified their phone and never started a trial
+    active  — trial_ends_at is still in the future
+    expired — it isn't
+
+  ⚠️ There is deliberately no "subscribed" or "cancelled" here. Subscriptions aren't built: the
+  members table carries OUR trial dates and nothing a payment provider owns. When that lands this
+  becomes a bigger union, and everything reading it will fail to compile — which is the point.
+*/
+export type MemberTrialState = "none" | "active" | "expired";
+
+/*
+  A member, as the admin dashboard reads them.
+
+  ⚠️ Real people. This is the only admin surface showing a verified personal phone number, and it's
+  shown in full on purpose — the support case is someone writing in and being looked up, which a
+  masked number can't serve. Everything here is need-to-know for that job and nothing more.
+*/
+export type AdminMember = {
+  id: string;
+  /* Optional — we ask at signup and they can skip. A support conversation works off the phone. */
+  name: string | null;
+  /* E.164, never prettified. Storing a formatted number is storing one a lookup can't match. */
+  phone: string;
+  phoneVerifiedAt: string;
+  trialState: MemberTrialState;
+  /* Null unless a trial was started. `trialState` is what to branch on; this is for showing when. */
+  trialEndsAt: string | null;
+  /* Null means they verified and never came back — a signal, not missing data. */
+  lastSeenAt: string | null;
+  createdAt: string;
+};
+
+export type AdminMemberSort = "name" | "phone" | "trial" | "lastSeen" | "joined";
+
+export type AdminDeal = Deal & {
+  isActive: boolean;
+  sortOrder: number;
+  /*
+    The structured offer behind `title` and `condition`.
+
+    Admin-only because no client needs it: they print the composed sentences, which is the whole
+    point of composing them. The editor needs the parts back to reopen a form on an existing offer.
+
+    ⚠️ All nullable, and null is a real state rather than missing data: offers created before the
+    form was constrained carry hand-written prose and no parts at all. The admin page shows those as
+    needing re-entry — there is no honest way to parse a noun back out of a free-form sentence.
+  */
+  itemLabel: string | null;
+  requiredItem: string | null;
+  requiredGender: DealGender | null;
+  /* percentage only. Null = the whole bill; otherwise a menu section's title, not its id — see the
+     column comment for why an FK would break on every menu save. */
+  scopeLabel: string | null;
+};
+
+/*
+  A photo with a handle on it.
+
+  The public shape is a bare array of URLs, which is all a client needs to render them and useless
+  for anything else — you cannot delete or reorder something you can't name. Admin gets the row id
+  and the position.
+*/
+export type AdminPhoto = {
+  id: string;
+  /* Full URL, composed from ASSET_BASE_URL like every other image the API sends. */
+  url: string;
+  /* Lowest wins: the first photo is the card image everywhere in the product. There is no
+     is_primary column — position IS the answer. */
+  sortOrder: number;
+};
+
+export type AdminMenuItem = {
+  id: string;
+  name: string;
+  /* The public projection drops this entirely; the editor needs it to round-trip. */
+  description: string | null;
+  /* Minor units (bani). The VENUE'S OWN price, undiscounted. */
+  priceMinor: number;
+  currency: string;
+  /* ⚠️ Unavailable items are filtered out of the public menu, so this switch decides whether a
+     member sees the line at all. */
+  isAvailable: boolean;
+};
+
+export type AdminMenuSection = {
+  id: string;
+  title: string;
+  items: AdminMenuItem[];
+};
+
+export type AdminVenue = Omit<VenueDetail, "deals" | "photos" | "menu"> & {
+  /* ⚠️ EVERY deal, not just the active ones — this deliberately shadows VenueDetail["deals"],
+     which is the active subset the app sees. */
+  deals: AdminDeal[];
+  /* Shadows VenueDetail["photos"], which is string[]. */
+  photos: AdminPhoto[];
+  /*
+    The menu, flattened out of the public `Menu | null` object.
+
+    An editor has to be able to SET the kind to start a price list on a venue that has none, and
+    sections can exist while kind is still null, so a nullable wrapper around both is the wrong
+    shape here even though it's the right one for a client that just renders what it's given.
+  */
+  menuKind: Menu["kind"] | null;
+  menuSections: AdminMenuSection[];
   isPublished: boolean;
   /* Null is a real state, not missing data — venues get created before the company behind them
      exists, and all 30 seeded ones have no partner at all. */
   partner: { id: string; companyName: string } | null;
+  /*
+    Which subcategories this venue is filed under, as keys.
+
+    ⚠️ Admin-only on purpose, and it is NOT the same thing as `tags`. Subcategories are a controlled
+    list the app's filters actually query on; tags are free text the venue describes itself with.
+    The public catalogue never sends either the assignments or the keys — it exposes the taxonomy
+    through /v1/categories and filters by it server-side, which is all a client needs.
+
+    A venue has exactly one category but any number of subcategories, and every key here belongs
+    to that one category — the write path enforces it.
+  */
+  subcategoryKeys: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -276,6 +435,19 @@ export type ApiError = {
       /* Both unique-index collisions, surfaced as 409s rather than as a generic 500. */
       | "SLUG_TAKEN"
       | "CATEGORY_NOT_FOUND"
+      /* A subcategory key that doesn't exist, or belongs to a different category than the one the
+         venue is being filed under. Usually means the category changed and the old category's
+         subcategories came along with it. */
+      | "SUBCATEGORY_INVALID"
+      /* A deal id that doesn't exist, or belongs to a different venue than the one in the path. */
+      | "DEAL_NOT_FOUND"
+      /* Same, for a photo. Also covers a reorder whose id list doesn't match the venue's photos. */
+      | "PHOTO_NOT_FOUND"
+      /* An upload that isn't one of the image types we accept. */
+      | "UNSUPPORTED_MEDIA_TYPE"
+      | "FILE_TOO_LARGE"
+      /* R2 refused the write. Ours to fix, not the caller's — always logged server-side. */
+      | "UPLOAD_FAILED"
       | "PARTNER_NOT_FOUND"
       | "LEAD_NOT_FOUND"
       | "ACTING_ADMIN_MISSING";

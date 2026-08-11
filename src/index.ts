@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
 import { pool } from "@/db/client";
-import { env } from "@/lib/env";
+import { corsAllowedOrigins, env } from "@/lib/env";
 import { adminRoute } from "@/routes/admin";
 import { categoriesRoute } from "@/routes/categories";
 import { venuesRoute } from "@/routes/venues";
@@ -14,13 +14,37 @@ const app = new Hono();
 app.use("*", logger());
 
 /*
-  Wide open for now because every route here is public catalogue data and the client origins aren't
-  decided yet — the domain is still open, and the mobile app sends no Origin at all.
+  Allowlist, not `*`.
 
-  ⚠️ Tighten this to an allowlist BEFORE anything authenticated ships. A credentialed endpoint
-  behind `origin: *` is how a session gets used from a site that isn't ours.
+  Only browsers enforce CORS, so this governs exactly one thing: whether another website's
+  JavaScript can read our responses on a visitor's behalf. The mobile app, both dashboards'
+  server-side proxies and curl all send no Origin and are unaffected — which is why this list stays
+  short. Today the entire cross-origin surface is POST /v1/partner-leads from the marketing site.
+
+  ⚠️ This is NOT what protects /v1/admin — that's the shared secret plus the Access token in
+  routes/admin.ts. Don't let a tightened CORS config read as "the admin routes are covered".
 */
-app.use("*", cors());
+app.use(
+  "*",
+  cors({
+    /* An unlisted origin — and a request with no Origin at all — gets no header back rather than a
+       reflected one. Reflecting whatever the caller sent is `*` with extra steps. */
+    origin: (origin) => (corsAllowedOrigins.has(origin) ? origin : null),
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    /*
+      Deliberately minimal. `x-admin-secret` and `cf-access-jwt-assertion` are NOT here and must
+      never be: both are set server-side by a dashboard proxy, which never preflights. Listing them
+      would be telling browsers those headers are acceptable cross-origin, which is precisely the
+      request shape that should be impossible.
+    */
+    allowHeaders: ["Content-Type", "Accept"],
+    /* Nothing here is cookie-authenticated — the app sends a bearer token, the dashboards call
+       server-to-server. `credentials: true` beside a reflected origin is the classic way someone
+       else's site gets to use a session. */
+    credentials: false,
+    maxAge: 86_400,
+  }),
+);
 
 /*
   Index of what's callable. Purely a developer convenience — hitting the root in a browser and
@@ -99,6 +123,14 @@ app.onError((err, c) => {
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`api listening on http://localhost:${info.port}`);
+  /* Printed because an empty allowlist fails in the one place nobody is looking — the marketing
+     site's lead form, in a browser, with a CORS error in a console on someone else's machine.
+     Server-side calls and the mobile app keep working either way, so nothing else would tell you. */
+  console.log(
+    corsAllowedOrigins.size > 0
+      ? `cors: allowing ${[...corsAllowedOrigins].join(", ")}`
+      : "cors: no browser origins allowed (CORS_ALLOWED_ORIGINS unset — the partner lead form will fail)",
+  );
 });
 
 export default app;

@@ -222,6 +222,15 @@ export const openingHours = pgTable(
 export const dealType = pgEnum("deal_type", ["one_plus_one", "free_item", "percentage"]);
 
 /*
+  Grammatical gender, used for one job: choosing "unui" or "unei" in a composed sentence.
+
+  Romanian has three genders, but neuter nouns take masculine articles in the singular — which is
+  all this is ever asked about — so two values cover it. Codes rather than Romanian words, same as
+  every other enum here.
+*/
+export const dealGender = pgEnum("deal_gender", ["m", "f"]);
+
+/*
   The discounts themselves. What a member sees on a venue page.
 
   Note what is NOT here: no redemption codes, no per-member "already used" flag, no expiry
@@ -236,16 +245,22 @@ export const deals = pgTable(
       .notNull()
       .references(() => venues.id, { onDelete: "cascade" }),
     type: dealType("type").notNull(),
+    /*
+      ⚠️ COMPOSED, never typed. Both this and `condition` are built server-side from the structured
+      columns below — see lib/deal-copy.ts. They stay because every client reads them verbatim and
+      always has, so none of this was visible to the mobile app.
+
+      They used to be free text a venue owner wrote, which is why the catalogue ended up with sixty
+      different ways of phrasing three offers. Anything writing here directly is now a bug.
+    */
     title: text("title").notNull(),
     /*
-      The catch, in plain Romanian — "Comanzi două feluri principale; cel mai ieftin nu se taxează."
+      The catch, in plain Romanian — "Produsul cu valoarea mai mică este gratuit."
 
       This is a `condition`, not a `description`, and the distinction is the point: a description
       invites a client to parse it for meaning, a condition is understood to be display-only. It is
       NEVER parsed, matched on, or used to decide anything. Whether a member may redeem right now is
       the server's call, made against structured columns — not against this sentence.
-
-      Partner content, so it stays Romanian, same as venue names and menu section titles.
     */
     condition: text("condition").notNull(),
     /*
@@ -255,6 +270,46 @@ export const deals = pgTable(
       discount — that'd be business logic on the device, working off a string a partner can edit.
     */
     percentOff: smallint("percent_off"),
+    /*
+      ── The structured offer, as the owner actually enters it ────────────────────────────────
+      These four are the input; `title` and `condition` above are what falls out of them.
+
+      All nullable, because sixty rows predate them and there is no honest way to parse a noun back
+      out of "Vii însoțit; al doilea bărbierit cu brici nu se taxează." Those rows keep their old
+      prose until someone re-enters them, and the admin form says so. New rows always have these —
+      enforced by the route's schema rather than by a CHECK, precisely so the old rows can stay.
+    */
+
+    /*
+      The noun the offer is about.
+
+      one_plus_one → what you get two of  ("felul principal", "tunsoarea")
+      free_item    → what comes free      ("o cafea", "desertul")
+      percentage   → NULL; a percentage is about the bill, not an item
+    */
+    itemLabel: text("item_label"),
+    /*
+      free_item only: what has to be bought to earn it. NULL means nothing does — a free
+      consultation is a real offer, not a malformed one.
+    */
+    requiredItem: text("required_item"),
+    /*
+      ⚠️ Grammatical gender of `required_item`, purely so the composed sentence reads like Romanian:
+      "la achiziția UNUI croissant" but "la achiziția UNEI cafele". There is no way to derive this
+      from the noun — Romanian gender isn't predictable from spelling — so the owner picks it.
+
+      NULL exactly when required_item is NULL; the CHECK below keeps the pair honest.
+    */
+    requiredGender: dealGender("required_gender"),
+    /*
+      percentage only: which menu section the discount is limited to, or NULL for the whole bill.
+
+      ⚠️ The section TITLE, not its id, and deliberately not a foreign key. Saving a venue's menu
+      replaces every section row (see replaceVenueMenu), so ids churn on every save — an FK here
+      would break every scoped offer each time anyone touched the menu. A title survives that and
+      goes stale only on a rename, which the admin page can show.
+    */
+    scopeLabel: text("scope_label"),
     /*
       What a member typically saves, in BANI (RON minor units). Integer — never a float, never a
       numeric we'd be tempted to do arithmetic on in JS. Clients display this and nothing else.
@@ -280,6 +335,19 @@ export const deals = pgTable(
       "deals_percent_off_matches_type",
       sql`(${t.type} = 'percentage' AND ${t.percentOff} BETWEEN 1 AND 100)
           OR (${t.type} <> 'percentage' AND ${t.percentOff} IS NULL)`,
+    ),
+    /*
+      The gender is only ever there to inflect the article in front of `required_item`, so one
+      without the other is meaningless: a gender with nothing to agree with, or a noun the composer
+      can't put an article in front of.
+
+      ⚠️ Deliberately the ONLY check on the new columns. The per-type rules ("a 1+1 must name an
+      item") are enforced by the route's zod schema instead, because sixty rows created before any
+      of this exists would fail a CHECK and take the migration down with them.
+    */
+    check(
+      "deals_required_gender_matches_item",
+      sql`(${t.requiredItem} IS NULL) = (${t.requiredGender} IS NULL)`,
     ),
   ],
 );

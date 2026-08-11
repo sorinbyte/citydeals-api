@@ -1,316 +1,178 @@
 /*
   Deals, keyed by venue slug. Split out of venues.ts so both files stay readable.
 
-  `condition` is the catch, in plain Romanian, and it is DISPLAY ONLY. Nothing parses it, matches on
-  it, or decides anything from it. Eligibility is worked out server-side from the structured columns
-  (type, refreshDays, people) — never from this sentence. If a rule can't be expressed in a column,
-  it isn't enforceable, and writing it here doesn't make it so.
+  ⚠️ No `title` and no `condition` here any more. Both are composed at seed time by the same
+  lib/deal-copy.ts the API uses, so a seeded catalogue is indistinguishable from one typed into the
+  admin form — which is the point. This file used to hold sixty hand-written sentences, and it was
+  the clearest evidence of the problem: "se taxează cel mai scump", "cel mai ieftin nu se taxează"
+  and "se taxează una singură" all described the same 1+1 rule.
+
+  A few offers changed meaning in the conversion, because the constrained model can't express them:
+
+    · loyalty ("a cincea tunsoare gratuită", "a treia cursă gratuită") — there is no counter in the
+      schema, so these were never enforceable anyway; they're now ordinary free-item offers
+    · quantity ("3 tacos la preț de 2") — same reason
+    · scopes that aren't menu sections ("la băuturi", "la livrare", "la meniul vegetarian") — a
+      percentage is now either the whole bill or one section, so these became whole-bill
 
   Placeholder content until real partners sign. Savings are in bani, integers, never floats.
 */
 
-export type DealType = "one_plus_one" | "free_item" | "percentage";
-
-export type DealSeed = {
-  type: DealType;
-  title: string;
-  condition: string;
+/*
+  Spelled out rather than reusing DealCopyInput, because that union's percentage arm also carries
+  `wholeScopeNoun` — which depends on the venue's menu_kind and so isn't known until insert time.
+*/
+export type DealSeedRow = {
+  offer:
+    | { type: "one_plus_one"; itemLabel: string }
+    | {
+        type: "free_item";
+        itemLabel: string;
+        requiredItem: string | null;
+        requiredGender: "m" | "f" | null;
+      }
+    | { type: "percentage"; percentOff: number; scopeLabel: string | null };
   avgSavingMinor: number;
   refreshDays: number;
   people: 1 | 2;
-  percentOff?: number;
 };
 
-// 1+1 is two people by definition — the helper enforces it so nobody hand-writes people: 1 here
-const bogo = (
-  title: string,
-  condition: string,
-  avgSavingMinor: number,
-  refreshDays: number,
-): DealSeed => ({ type: "one_plus_one", title, condition, avgSavingMinor, refreshDays, people: 2 });
+/* 1+1 is two people by definition — the helper enforces it so nobody hand-writes people: 1. */
+const bogo = (itemLabel: string, avgSavingMinor: number, refreshDays: number): DealSeedRow => ({
+  offer: { type: "one_plus_one", itemLabel },
+  avgSavingMinor,
+  refreshDays,
+  people: 2,
+});
 
-// people defaults to 1; pass 2 when the condition itself requires a second person or second item
+/*
+  `required` is the noun that has to be bought, with its grammatical gender, or null for an offer
+  that needs no purchase at all.
+
+  ⚠️ Feminine nouns go in the GENITIVE, because that's the form the composed sentence needs:
+  "la achiziția unei cafele", not "unei cafea". Masculine and neuter don't change.
+*/
 const free = (
-  title: string,
-  condition: string,
+  itemLabel: string,
+  required: readonly [string, "m" | "f"] | null,
   avgSavingMinor: number,
   refreshDays: number,
   people: 1 | 2 = 1,
-): DealSeed => ({ type: "free_item", title, condition, avgSavingMinor, refreshDays, people });
-
-// percentOff is stored, never scraped back out of the title
-const pct = (
-  percentOff: number,
-  title: string,
-  condition: string,
-  avgSavingMinor: number,
-  refreshDays: number,
-  people: 1 | 2 = 1,
-): DealSeed => ({
-  type: "percentage",
-  title,
-  condition,
+): DealSeedRow => ({
+  offer: {
+    type: "free_item",
+    itemLabel,
+    requiredItem: required?.[0] ?? null,
+    requiredGender: required?.[1] ?? null,
+  },
   avgSavingMinor,
   refreshDays,
   people,
-  percentOff,
 });
 
-export const dealsByVenueSlug: Record<string, DealSeed[]> = {
+/* `scope` is a menu section title, or null for the whole bill. Only titles that actually exist on
+   that venue's menu — a scope pointing at a section the venue doesn't have would read as a promise
+   nobody can find. */
+const pct = (
+  percentOff: number,
+  scope: string | null,
+  avgSavingMinor: number,
+  refreshDays: number,
+  people: 1 | 2 = 1,
+): DealSeedRow => ({
+  offer: { type: "percentage", percentOff, scopeLabel: scope },
+  avgSavingMinor,
+  refreshDays,
+  people,
+});
+
+export const dealsByVenueSlug: Record<string, DealSeedRow[]> = {
   // ─── Restaurante ──────────────────────────────────────────────────────────────────────────
   "trattoria-bucureseana": [
-    bogo(
-      "1+1 la felul principal",
-      "Comanzi două feluri principale; cel mai ieftin nu se taxează.",
-      5500,
-      90,
-    ),
-    free(
-      "Desert gratis la comandă",
-      "La orice comandă de minimum două feluri principale.",
-      2200,
-      30,
-    ),
-    pct(
-      20,
-      "-20% la băuturi",
-      "Se aplică la toate băuturile, inclusiv cocktailurile casei.",
-      1500,
-      30,
-    ),
+    bogo("felul principal", 5500, 90),
+    free("desert", ["fel principal", "m"], 2200, 30),
+    pct(20, null, 1500, 30),
   ],
   "sushi-master": [
-    bogo(
-      "1+1 la platourile de sushi",
-      "Alegi două platouri; se taxează doar cel mai scump.",
-      9500,
-      90,
-    ),
-    free("Supă miso gratuită", "La orice platou comandat.", 1800, 30),
+    bogo("platoul de sushi", 9500, 90),
+    free("supă miso", ["platou", "m"], 1800, 30),
   ],
   "el-torito": [
-    bogo("1+1 la tacos", "Două porții de tacos; se taxează una singură.", 3500, 30),
-    free("Guacamole din partea casei", "La orice fel principal comandat.", 1900, 30),
+    bogo("porția de tacos", 3500, 30),
+    free("guacamole", ["fel principal", "m"], 1900, 30),
   ],
-  "taj-palace": [
-    pct(
-      20,
-      "-20% la meniul à la carte",
-      "Se aplică la toate felurile din meniul à la carte.",
-      4200,
-      30,
-    ),
-    free(
-      "Naan gratuit la orice curry",
-      "Câte un naan din tandoor la fiecare curry comandat.",
-      1200,
-      7,
-    ),
-  ],
+  "taj-palace": [pct(20, null, 4200, 30), free("naan", ["curry", "m"], 1200, 7)],
   "cafeneaua-veche": [
-    bogo(
-      "1+1 la cafea de specialitate",
-      "Două cafele de specialitate; se taxează una. Valabil la orice oră.",
-      1700,
-      7,
-    ),
-    pct(
-      15,
-      "-15% la mic dejun",
-      "Se aplică la meniul de mic dejun, de luni până vineri.",
-      2400,
-      30,
-    ),
+    bogo("cafeaua de specialitate", 1700, 7),
+    // "Mic dejun" is a real section on this venue's menu
+    pct(15, "Mic dejun", 2400, 30),
   ],
   "osteria-del-corso": [
-    pct(25, "-25% la paste", "Se aplică la toate pastele făcute în casă.", 3800, 30),
-    free("Tiramisu gratis", "La comanda a două feluri principale.", 2500, 30, 2),
+    pct(25, "Paste", 3800, 30),
+    free("tiramisu", ["fel principal", "m"], 2500, 30, 2),
   ],
-  "kaido-sushi": [
-    bogo("1+1 la ramen", "Două boluri de ramen; se taxează cel mai scump.", 4800, 90),
-    pct(10, "-10% la toată nota", "Se aplică pe toată nota, fără condiții suplimentare.", 2600, 30),
-  ],
-  "taqueria-central": [
-    free("3 tacos la preț de 2", "Comanzi trei tacos; se taxează doar două.", 1600, 30),
-  ],
-  "namaste-bucuresti": [
-    pct(
-      20,
-      "-20% la meniul vegetarian",
-      "Se aplică la toate felurile vegetariene și vegane.",
-      3300,
-      30,
-    ),
-    free("Lassi gratuit", "Un lassi de mango sau sărat, la orice fel principal.", 1400, 7),
-  ],
-  "morning-glory": [
-    bogo(
-      "1+1 la brunch în weekend",
-      "Două meniuri de brunch; se taxează unul. Valabil sâmbătă și duminică.",
-      6500,
-      90,
-    ),
-  ],
-  "pasta-e-basta": [
-    pct(15, "-15% la toată nota", "Se aplică pe toată nota, inclusiv băuturile.", 3100, 30),
-    free("Focaccia din partea casei", "Servită la începutul mesei, la orice comandă.", 1500, 30),
-  ],
-  "sakura-bistro": [
-    bogo("1+1 la boluri poke", "Două boluri poke; se taxează cel mai scump.", 4400, 90),
-    pct(10, "-10% la livrare", "Se aplică la comenzile pentru livrare.", 1200, 7),
-  ],
-  "casa-mexicana": [
-    pct(20, "-20% la fajitas", "Se aplică la toate platourile de fajitas.", 3600, 30),
-    free("Nachos din partea casei", "La comanda a două cocktailuri.", 2100, 30, 2),
-  ],
-  "curry-house": [
-    bogo(
-      "1+1 la felul principal",
-      "Comanzi două feluri principale; se taxează cel mai scump.",
-      4600,
-      90,
-    ),
-  ],
-  "brunch-and-co": [
-    pct(
-      15,
-      "-15% la mic dejun",
-      "Se aplică la meniul de mic dejun, zilnic până la ora 12:00.",
-      2300,
-      30,
-    ),
-    free(
-      "Cafea gratis la orice croissant",
-      "O cafea filtru sau un espresso la fiecare croissant.",
-      1300,
-      7,
-    ),
-  ],
+  "kaido-sushi": [bogo("bolul de ramen", 4800, 90), pct(10, null, 2600, 30)],
+  // was "3 tacos la preț de 2" — a quantity offer the schema can't enforce
+  "taqueria-central": [free("porție de nachos", ["fel principal", "m"], 1600, 30)],
+  "namaste-bucuresti": [pct(20, null, 3300, 30), free("lassi", ["curry", "m"], 1400, 7)],
+  "morning-glory": [bogo("meniul de brunch", 6500, 90)],
+  "pasta-e-basta": [pct(15, null, 3100, 30), free("focaccia", ["fel principal", "m"], 1500, 30)],
+  "sakura-bistro": [bogo("bolul poke", 4400, 90), pct(10, null, 1200, 7)],
+  "casa-mexicana": [pct(20, "Platouri", 3600, 30), free("nachos", ["cocktail", "m"], 2100, 30, 2)],
+  "curry-house": [bogo("felul principal", 4600, 90)],
+  "brunch-and-co": [pct(15, "Mic dejun", 2300, 30), free("cafea", ["croissant", "m"], 1300, 7)],
 
   // ─── Sănătate & Frumusețe ─────────────────────────────────────────────────────────────────
   "barber-shop-centrul-vechi": [
-    pct(25, "-25% la tuns + barbă", "Se aplică la pachetul de tuns și aranjat barba.", 3000, 30),
-    free(
-      "A cincea tunsoare gratuită",
-      "După patru tunsori înregistrate, a cincea nu se taxează.",
-      8000,
-      90,
-    ),
+    pct(25, "Tuns & barbă", 3000, 30),
+    // was "a cincea tunsoare gratuită" — loyalty, and there is no counter in the schema
+    free("aranjatul bărbii", ["tunsori", "f"], 8000, 90),
   ],
-  "frizeria-clasica": [
-    bogo(
-      "1+1 la bărbierit tradițional",
-      "Vii însoțit; al doilea bărbierit cu brici nu se taxează.",
-      6000,
-      90,
-    ),
-  ],
+  "frizeria-clasica": [bogo("bărbieritul tradițional", 6000, 90)],
   "glow-beauty-bar": [
-    pct(
-      25,
-      "-25% la tratamentul facial complet",
-      "Se aplică la tratamentul facial complet, cu produse profesionale.",
-      9000,
-      90,
-    ),
-    free(
-      "Consultație gratuită",
-      "Consultație de îngrijire a tenului, fără altă comandă.",
-      5000,
-      90,
-    ),
+    pct(25, "Ten", 9000, 90),
+    // the case that needs no purchase at all
+    free("consultație", null, 5000, 90),
   ],
   "spa-elysee": [
-    pct(20, "-20% la pachetele spa", "Se aplică la toate pachetele spa de o zi.", 12000, 90),
-    free("Acces gratuit la saună", "La orice tratament comandat.", 6000, 30),
+    pct(20, "Pachete", 12000, 90),
+    free("accesul la saună", ["tratament", "m"], 6000, 30),
   ],
-  "studio-relax-masaj": [
-    bogo(
-      "1+1 la masajul de 60 de minute",
-      "Două ședințe de 60 de minute; se taxează una.",
-      15000,
-      90,
-    ),
-  ],
+  "studio-relax-masaj": [bogo("masajul de 60 de minute", 15000, 90)],
 
   // ─── Divertisment ─────────────────────────────────────────────────────────────────────────
+  // No price lists at all down here, so every percentage is the whole bill.
   "club-biliard-8-ball": [
-    free("O oră gratuită", "La două ore de joc plătite, a treia nu se taxează.", 4000, 30, 2),
-    pct(15, "-15% la băuturi", "Se aplică la bar, pe durata jocului.", 1800, 30),
+    free("oră de joc", ["ore de joc", "f"], 4000, 30, 2),
+    pct(15, null, 1800, 30),
   ],
   "cinema-city": [
-    bogo(
-      "1+1 la orice bilet de film",
-      "Două bilete; se taxează unul. Valabil la orice proiecție 2D.",
-      3500,
-      30,
-    ),
-    free("Popcorn mare gratuit", "La achiziția a două bilete.", 2500, 30, 2),
-    pct(10, "-10% la snacks", "Se aplică la tot standul de snacks și băuturi.", 1000, 7),
+    bogo("biletul de film", 3500, 30),
+    free("popcorn mare", ["bilet", "m"], 2500, 30, 2),
+    pct(10, null, 1000, 7),
   ],
   "karting-arena": [
-    pct(20, "-20% la cursele de seară", "Se aplică la toate cursele de după ora 18:00.", 3000, 30),
-    free("A treia cursă gratuită", "La două curse plătite, a treia nu se taxează.", 6000, 90),
+    pct(20, null, 3000, 30),
+    // was "a treia cursă gratuită" — loyalty again
+    free("cursă de încălzire", ["curse", "f"], 6000, 90),
   ],
-  "padel-club-bucuresti": [
-    pct(25, "-25% la închirierea terenului", "Se aplică în orice interval liber.", 5000, 30),
-  ],
+  "padel-club-bucuresti": [pct(25, null, 5000, 30)],
   "tenis-club-herastrau": [
-    bogo(
-      "1+1 la orele de dimineață",
-      "Două ore de teren; se taxează una. Valabil până la ora 11:00.",
-      7000,
-      90,
-    ),
-    free(
-      "Închiriere rachetă gratuită",
-      "Racheta și mingile sunt incluse la orice rezervare.",
-      2000,
-      30,
-    ),
+    bogo("ora de teren", 7000, 90),
+    free("închirierea rachetei", ["rezervări", "f"], 2000, 30),
   ],
 
   // ─── Retail & Servicii ────────────────────────────────────────────────────────────────────
-  "boutique-central": [
-    pct(
-      10,
-      "-10% la toată colecția nouă",
-      "Se aplică la toate articolele din colecția curentă.",
-      8000,
-      90,
-    ),
-    free("Transport gratuit", "La comenzile online, fără sumă minimă.", 2000, 30),
-  ],
-  "casa-si-stil": [
-    pct(
-      15,
-      "-15% la decorațiuni",
-      "Se aplică la obiectele de decor și textilele din magazin.",
-      6000,
-      90,
-    ),
-  ],
+  "boutique-central": [pct(10, null, 8000, 90), free("transportul", ["comenzi", "f"], 2000, 30)],
+  "casa-si-stil": [pct(15, null, 6000, 90)],
   "floraria-iris": [
-    pct(
-      20,
-      "-20% la buchete",
-      "Se aplică la buchetele din vitrină și la comenzile personalizate.",
-      4000,
-      30,
-    ),
-    free("Livrare gratuită în București", "În oraș, în aceeași zi.", 2500, 30),
+    pct(20, null, 4000, 30),
+    free("livrarea în București", ["buchet", "m"], 2500, 30),
   ],
   "service-gsm-expres": [
-    pct(
-      25,
-      "-25% la înlocuirea ecranului",
-      "Se aplică la înlocuirea ecranului, cu piese în garanție.",
-      15000,
-      90,
-    ),
-    free("Diagnostic gratuit", "Verificare completă a telefonului, fără costuri.", 5000, 30),
+    pct(25, null, 15000, 90),
+    // no purchase needed — you bring the phone in and the check is free
+    free("diagnosticul", null, 5000, 30),
   ],
-  "croitoria-moderna": [
-    pct(15, "-15% la ajustări", "Se aplică la toate ajustările și retușurile.", 3000, 30),
-  ],
+  "croitoria-moderna": [pct(15, null, 3000, 30)],
 };

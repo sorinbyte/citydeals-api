@@ -18,10 +18,12 @@ import {
 } from "@/db/schema";
 import { dealsByVenueSlug } from "@/db/seed/data/deals";
 import { leadSeed } from "@/db/seed/data/leads";
+import { memberSeed } from "@/db/seed/data/members";
 import { menuArchetypes, menuByVenueSlug } from "@/db/seed/data/menus";
 import { partnerSeed } from "@/db/seed/data/partners";
 import { categorySeed, hoursByCategory, subcategorySeed } from "@/db/seed/data/taxonomy";
 import { venueSeed } from "@/db/seed/data/venues";
+import { composeDealCopy, wholeScopeNoun } from "@/lib/deal-copy";
 
 /*
   Loads the placeholder catalogue. Safe to re-run — it truncates the venue side first, so you get
@@ -60,6 +62,18 @@ const SEED_ADMIN_EMAIL = "seed-admin@citydeals.invalid";
 const SEED_LEAD_EMAIL_PATTERN = "%.invalid";
 
 /*
+  And the same again for members, which have neither a created_by nor an email.
+
+  ⚠️ This prefix is a SAFETY BOUNDARY, not a formatting choice. Romania's 070 range isn't allocated
+  to mobile operators, so a number here can never belong to a real person — which is what makes it
+  safe to delete on sight. Everything below keys off it in both directions: the guard counts members
+  OUTSIDE this range (any of them stops the seed), and the delete only ever removes members INSIDE
+  it. Widen it and re-seeding starts deleting real accounts.
+*/
+const SEED_MEMBER_PHONE_PREFIX = "+40700";
+const SEED_MEMBER_PHONE_PATTERN = `${SEED_MEMBER_PHONE_PREFIX}%`;
+
+/*
   The catalogue truncate is not as contained as it looks.
 
   `TRUNCATE venues CASCADE` reaches photos, deals, hours and subcategory links — all placeholder
@@ -72,8 +86,9 @@ const SEED_LEAD_EMAIL_PATTERN = "%.invalid";
   able to re-run it. So the test is ownership, not existence: refuse if the database holds identity
   data this seed did not create.
 
-    · members — the seed never creates one. Any row here is a real person who verified a real
-      phone number, and no dev convenience command gets to touch that.
+    · members OUTSIDE the seed's reserved phone range — a real person who verified a real phone
+      number, and no dev convenience command gets to touch that. The seed does create members now,
+      but only on +40700, which can't reach a handset; anything else is somebody's account.
     · users other than the seed admin — a real account, invited or not.
     · partners not filed under the seed admin — somebody added a genuine company through admin.
     · leads on a non-`.invalid` domain — a genuine inbound lead. `POST /partner-leads` doesn't
@@ -86,7 +101,10 @@ const SEED_LEAD_EMAIL_PATTERN = "%.invalid";
 async function assertOnlySeedIdentityData(): Promise<void> {
   const [row] = await db
     .select({
-      members: sql<number>`(SELECT count(*) FROM ${members})::int`,
+      /* ⚠️ NOT LIKE, so the seed's own reserved-range members don't block a re-run — but a single
+         member on any real number does, which is the whole point. */
+      members: sql<number>`(SELECT count(*) FROM ${members}
+        WHERE ${members.phone} NOT LIKE ${SEED_MEMBER_PHONE_PATTERN})::int`,
       users: sql<number>`(SELECT count(*) FROM ${users}
         WHERE lower(${users.email}) <> ${SEED_ADMIN_EMAIL})::int`,
       partners: sql<number>`(SELECT count(*) FROM ${partners}
@@ -99,7 +117,7 @@ async function assertOnlySeedIdentityData(): Promise<void> {
     .from(sql`(SELECT 1) AS _`);
 
   const found = [
-    [row?.members ?? 0, "member(s)"],
+    [row?.members ?? 0, "member(s) on a real phone number"],
     [row?.users ?? 0, "non-seed user(s)"],
     [row?.partners ?? 0, "partner(s) not created by the seed"],
     [row?.leads ?? 0, "real lead(s)"],
@@ -130,6 +148,12 @@ async function seed(): Promise<void> {
     */
     await tx.execute(
       sql`DELETE FROM ${partnerLeads} WHERE ${partnerLeads.email} LIKE ${SEED_LEAD_EMAIL_PATTERN}`,
+    );
+    /* ⚠️ LIKE the reserved prefix, never a bare DELETE. The guard above has already refused to run
+       if a real member exists, but this is the statement that would do the damage — it says out
+       loud which rows it's allowed to touch rather than relying on a check twenty lines away. */
+    await tx.execute(
+      sql`DELETE FROM ${members} WHERE ${members.phone} LIKE ${SEED_MEMBER_PHONE_PATTERN}`,
     );
     await tx.execute(sql`DELETE FROM ${partners} WHERE ${partners.createdByUserId} IN (
       SELECT id FROM ${users} WHERE lower(${users.email}) = ${SEED_ADMIN_EMAIL}
@@ -190,18 +214,40 @@ async function seed(): Promise<void> {
       const venueDeals = dealsByVenueSlug[v.slug] ?? [];
       if (venueDeals.length) {
         await tx.insert(deals).values(
-          venueDeals.map((deal, i) => ({
-            venueId: row.id,
-            type: deal.type,
-            title: deal.title,
-            condition: deal.condition,
-            // null for everything that isn't a percentage deal — the CHECK constraint enforces it
-            percentOff: deal.percentOff ?? null,
-            avgSavingMinor: deal.avgSavingMinor,
-            refreshDays: deal.refreshDays,
-            people: deal.people,
-            sortOrder: i,
-          })),
+          venueDeals.map((deal, i) => {
+            /*
+              ⚠️ Composed through the SAME function the API uses, never written by hand. A seeded
+              offer and one typed into the admin form are then the same thing, which is what makes
+              the seed useful for testing the form at all.
+
+              Only a percentage needs the venue's noun for "everything" — "tot meniul" for a
+              restaurant, "toate serviciile" for a spa, "toată nota" where there's no price list.
+            */
+            const { title, condition } = composeDealCopy(
+              deal.offer.type === "percentage"
+                ? { ...deal.offer, wholeScopeNoun: wholeScopeNoun(menu?.kind ?? null) }
+                : deal.offer,
+            );
+
+            const offer = deal.offer;
+
+            return {
+              venueId: row.id,
+              type: offer.type,
+              title,
+              condition,
+              // null for everything that isn't a percentage deal — the CHECK constraint enforces it
+              percentOff: offer.type === "percentage" ? offer.percentOff : null,
+              itemLabel: offer.type === "percentage" ? null : offer.itemLabel,
+              requiredItem: offer.type === "free_item" ? offer.requiredItem : null,
+              requiredGender: offer.type === "free_item" ? offer.requiredGender : null,
+              scopeLabel: offer.type === "percentage" ? offer.scopeLabel : null,
+              avgSavingMinor: deal.avgSavingMinor,
+              refreshDays: deal.refreshDays,
+              people: deal.people,
+              sortOrder: i,
+            };
+          }),
         );
       }
 
@@ -306,6 +352,34 @@ async function seed(): Promise<void> {
           : null,
       })),
     );
+
+    /*
+      Members, all on the reserved range.
+
+      Dates are computed from now() rather than hardcoded, so "trial expires within 3 days" always
+      has rows in it — a fixed date would test as empty a week after seeding and read as the segment
+      being broken.
+
+      phone_verified_at is set to the join date because the row only exists because verification
+      succeeded; there is no such thing as an unverified member.
+    */
+    const now = Date.now();
+    const daysFromNow = (days: number) => new Date(now + days * 24 * 60 * 60 * 1000);
+
+    await tx.insert(members).values(
+      memberSeed.map((member) => ({
+        phone: `${SEED_MEMBER_PHONE_PREFIX}${member.phoneSuffix}`,
+        name: member.name,
+        phoneVerifiedAt: daysFromNow(-member.joinedDaysAgo),
+        trialStartedAt:
+          member.trialEndsInDays === null
+            ? null
+            : daysFromNow(member.trialEndsInDays - member.trialLengthDays),
+        trialEndsAt: member.trialEndsInDays === null ? null : daysFromNow(member.trialEndsInDays),
+        lastSeenAt: member.lastSeenDaysAgo === null ? null : daysFromNow(-member.lastSeenDaysAgo),
+        createdAt: daysFromNow(-member.joinedDaysAgo),
+      })),
+    );
   });
 
   const [counts] = await db
@@ -320,6 +394,11 @@ async function seed(): Promise<void> {
       // the number worth watching: a partner whose slugs didn't resolve would show up here
       linkedVenues: sql<number>`(SELECT count(*) FROM ${venues} WHERE ${venues.partnerId} IS NOT NULL)::int`,
       leads: sql<number>`(SELECT count(*) FROM ${partnerLeads})::int`,
+      members: sql<number>`(SELECT count(*) FROM ${members})::int`,
+      /* Should always be 0 in dev. Anything else means a real signup exists — worth seeing in the
+         summary rather than discovering when the guard refuses to run next time. */
+      realMembers: sql<number>`(SELECT count(*) FROM ${members}
+        WHERE ${members.phone} NOT LIKE ${SEED_MEMBER_PHONE_PATTERN})::int`,
     })
     .from(sql`(SELECT 1) AS _`);
 
