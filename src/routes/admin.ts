@@ -4,7 +4,12 @@ import { z } from "zod";
 
 import { type AccessIdentity, createAccessVerifier } from "@/lib/access";
 import { adminIdentityEnabled, env } from "@/lib/env";
-import { UPLOADABLE_IMAGE_TYPES, deleteVenuePhotoObject, uploadVenuePhoto } from "@/lib/r2";
+import {
+  MAX_UPLOAD_BYTES,
+  UPLOADABLE_IMAGE_TYPES,
+  deleteVenuePhotoObject,
+  uploadVenuePhoto,
+} from "@/lib/r2";
 import { listMembersForAdmin } from "@/services/members";
 import {
   createPartner,
@@ -241,10 +246,6 @@ const dealFields = {
   people: z.number().int().min(1).max(20),
   isActive: z.boolean(),
 };
-
-/* 8 MB. A resized WebP off the admin uploader is ~150KB, so this only ever catches a client that
-   skipped the resize or something that isn't really a photo. */
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 /* The complete, ordered list of the venue's photo ids. Partial lists are rejected in the service —
    see reorderVenuePhotos for why applying half an order is worse than refusing. */
@@ -741,7 +742,17 @@ export const adminRoute = new Hono<AdminEnv>()
     }
 
     const result = await addVenuePhoto(id.data, path);
-    if (!result.ok) return c.json({ error: { code: "VENUE_NOT_FOUND" } }, 404);
+    if (!result.ok) {
+      /* Already in R2 by now, so take it back out or the bucket collects an orphan per refusal. */
+      await deleteVenuePhotoObject(path);
+
+      /* The per-venue cap applies here too — it's a catalogue rule about how much of one venue a
+         member should have to swipe through, not a partner restriction. */
+      if (result.reason === "PHOTO_LIMIT_REACHED") {
+        return c.json({ error: { code: "PHOTO_LIMIT_REACHED" } }, 409);
+      }
+      return c.json({ error: { code: "VENUE_NOT_FOUND" } }, 404);
+    }
 
     return c.json(result.venue, 201);
   })

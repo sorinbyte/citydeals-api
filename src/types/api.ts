@@ -103,6 +103,26 @@ export type OpeningWindow = {
   closesAt: string;
 };
 
+/*
+  One opening window with the day attached — the whole week, flat, for an editor.
+
+  ⚠️ NOT on the public venue shape, and it shouldn't be. Clients are given `isOpen`, `opensAt` and
+  `todayHours` precisely so nobody reimplements the open/closed decision on a device with a wrong
+  clock; handing them the raw table would invite exactly that.
+
+  `weekday` is ISO-8601: 1 = Monday … 7 = Sunday, matching Postgres' EXTRACT(ISODOW) and the
+  queries in lib/hours.ts.
+
+  ⚠️ `closesAt` <= `opensAt` is LEGAL and means the window runs past midnight — a restaurant open
+  10:00–01:00 is one row, Friday, closing Saturday morning. Anything validating "close must be
+  after open" breaks every venue in the catalogue that shuts after midnight.
+*/
+export type VenueHoursWindow = {
+  weekday: number;
+  opensAt: string;
+  closesAt: string;
+};
+
 export type VenueDetail = VenueSummary & {
   address: string;
   /*
@@ -227,6 +247,38 @@ export type AdminVenueListItem = {
 export type AdminVenueSort = "name" | "category" | "area" | "partner" | "offers" | "status";
 
 /*
+  One of the venues a partner was granted, for the picker on their own dashboard.
+
+  Deliberately NOT AdminVenueListItem, even though it looks similar. That one carries `partner`,
+  because the whole point of the admin table is seeing which company a venue belongs to; here the
+  answer is always "yours" and the column would be the same word on every row.
+
+  It carries a photo where the admin table doesn't, for the opposite reason: admin triages thirty
+  venues in a dense table and a thumbnail per row is noise, while a partner is choosing between
+  three places they recognise on sight.
+
+  ⚠️ No sort, no filters, no paging anywhere near this. A venue_owner has a handful of venues —
+  every one of those controls would be machinery with nothing to do.
+*/
+export type PartnerVenueListItem = {
+  id: string;
+  slug: string;
+  name: string;
+  categoryKey: string;
+  area: string;
+  /* Full URL of the first photo, or null. Same "position is primary" rule as everywhere else. */
+  image: string | null;
+  /* ACTIVE offers only — what the venue is actually running right now, which is the number a
+     partner is checking when they glance at this list. */
+  activeDealCount: number;
+  /*
+    Read-only on this dashboard. Shown because a partner needs to know whether members can see
+    them at all; not editable, because going live is a commercial decision.
+  */
+  isPublished: boolean;
+};
+
+/*
   Where a member is in their trial. Derived in SQL from two nullable timestamps, so no client works
   it out from dates and no two clients disagree about what "expired" means.
 
@@ -335,6 +387,12 @@ export type AdminVenue = Omit<VenueDetail, "deals" | "photos" | "menu"> & {
   */
   menuKind: Menu["kind"] | null;
   menuSections: AdminMenuSection[];
+  /*
+    The full week, for the hours editor. `todayHours` inherited from VenueDetail stays as it is —
+    it answers "what are today's hours" for a display line, and this answers "what does the whole
+    schedule look like" for a form. Different questions, so both are here.
+  */
+  weekHours: VenueHoursWindow[];
   isPublished: boolean;
   /* Null is a real state, not missing data — venues get created before the company behind them
      exists, and all 30 seeded ones have no partner at all. */

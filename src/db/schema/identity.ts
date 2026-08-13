@@ -135,6 +135,89 @@ export const userVenues = pgTable(
 );
 
 /*
+  What a one-time link is for. The token itself is identical either way — same length, same
+  hashing, same expiry rules — but which one it is decides what happens on the way in: an accepted
+  invite stamps users.invite_accepted_at, an ordinary login doesn't.
+
+  Kept as a column rather than two tables because everything else about them is the same, and two
+  near-identical tables is how the consume path ends up written twice and fixed once.
+*/
+export const loginTokenPurpose = pgEnum("login_token_purpose", ["login", "invite"]);
+
+/*
+  Magic links. The whole of partner authentication, since there is no password anywhere in this
+  schema and there isn't going to be.
+
+  ⚠️ The raw token is NEVER stored. `token_hash` is SHA-256 of the value that went in the email, so
+  a database dump — a backup on someone's laptop, a leaked read replica — is a list of useless
+  hashes rather than a set of live logins. The plaintext exists in exactly two places: the email,
+  and the request that redeems it.
+
+  SHA-256 rather than bcrypt/argon2 on purpose. Those exist to make LOW-entropy secrets expensive
+  to guess; these tokens are 32 random bytes, so there is nothing to brute force and a slow hash
+  would only make every sign-in slower.
+*/
+export const loginTokens = pgTable(
+  "login_tokens",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /* Unique so a hash collision or a repeated insert can't produce two rows one consume would
+       have to choose between. */
+    tokenHash: text("token_hash").notNull(),
+    purpose: loginTokenPurpose("purpose").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /*
+      Single use, recorded rather than deleted.
+
+      Deleting on redemption would be simpler and worse: "this link was already used" and "this link
+      never existed" would become the same answer, and the first is a thing that happens honestly —
+      an email scanner follows the link before the person does. Keeping the row lets the API say
+      TOKEN_USED, which the partner app words as "cere unul nou" instead of "invalid".
+    */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("login_tokens_hash_key").on(t.tokenHash),
+    /* Drives "invalidate this person's outstanding links", which happens on every new request so
+       asking twice doesn't leave two working links in an inbox. */
+    index("login_tokens_user_idx").on(t.userId),
+  ],
+);
+
+/*
+  Live partner sessions. One row per sign-in.
+
+  ⚠️ A table rather than a stateless signed token, and the reason is revocation. Signing out has to
+  actually end the session, and suspending a venue_owner in admin has to end theirs — neither is
+  possible with a self-contained JWT unless you keep a blocklist, which is this table with extra
+  steps and worse failure modes.
+
+  Same hashing rule as above: the cookie holds the plaintext, the database holds SHA-256 of it.
+*/
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("sessions_hash_key").on(t.tokenHash),
+    /* "End every session this person has" — sign-out-everywhere, and what suspending an account
+       should do. */
+    index("sessions_user_idx").on(t.userId),
+  ],
+);
+
+/*
   App members. Phone-first, because that's the anti-fraud anchor: without a verified number one
   subscription gets shared by ten people, and that's what makes partners pull their best offers.
 

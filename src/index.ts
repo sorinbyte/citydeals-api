@@ -7,6 +7,7 @@ import { pool } from "@/db/client";
 import { corsAllowedOrigins, env } from "@/lib/env";
 import { adminRoute } from "@/routes/admin";
 import { categoriesRoute } from "@/routes/categories";
+import { partnerRoute } from "@/routes/partner";
 import { venuesRoute } from "@/routes/venues";
 
 const app = new Hono();
@@ -64,6 +65,14 @@ app.get("/", (c) =>
       /* Listed but not reachable without the admin secret — see routes/admin.ts. Naming them
          costs nothing: an attacker guesses /partners on the first try anyway, and hiding a route
          from a JSON index has never been what stops one. */
+      "POST /v1/partner/auth/request-link",
+      "POST /v1/partner/auth/session",
+      "GET|DELETE /v1/partner/session (session cookie)",
+      "GET /v1/partner/venues (session cookie)",
+      "GET /v1/partner/venues/:id (session cookie)",
+      "PATCH /v1/partner/venues/:id/contact (session cookie)",
+      "PATCH /v1/partner/venues/:id/deals/:dealId (session cookie)",
+      "POST|DELETE /v1/partner/venues/:id/photos (session cookie)",
       "GET|POST /v1/admin/partners (admin secret)",
       "GET /v1/admin/partner-leads (admin secret)",
       "PATCH /v1/admin/partner-leads/:id (admin secret)",
@@ -105,6 +114,10 @@ v1.route("/categories", categoriesRoute);
 /* Gated by a shared secret inside the route file, not here — one gate, next to the handlers it
    guards, rather than a middleware someone has to remember this mount point needs. */
 v1.route("/admin", adminRoute);
+/* Session-cookie gated, per route rather than per subtree — the two auth endpoints under it are
+   exactly the ones you reach without a session. Shares no gate, no middleware and no helper with
+   /v1/admin above; see the note at the top of routes/partner.ts. */
+v1.route("/partner", partnerRoute);
 
 app.route("/v1", v1);
 
@@ -131,6 +144,27 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
       ? `cors: allowing ${[...corsAllowedOrigins].join(", ")}`
       : "cors: no browser origins allowed (CORS_ALLOWED_ORIGINS unset — the partner lead form will fail)",
   );
+
+  /*
+    ⚠️ Both of these print because both are development-only holes, and a hole nobody can see is a
+    hole that ships. Same reasoning as the CORS line above: the symptom otherwise shows up
+    somewhere nobody is looking.
+  */
+  if (env.LOGIN_LINK_TO_CONSOLE === "yes") {
+    console.warn(
+      "⚠️  LOGIN_LINK_TO_CONSOLE=yes — partner magic links are printed to this console in full.",
+      "Anyone who can read these logs can sign in as any partner. Never set this in production.",
+    );
+  }
+  if (env.ALLOW_INSECURE_COOKIE === "yes") {
+    console.warn(
+      "⚠️  ALLOW_INSECURE_COOKIE=yes — the partner session cookie is sent without Secure,",
+      "so it travels in clear text over http. localhost only.",
+    );
+  }
+  if (!env.PARTNER_BASE_URL) {
+    console.log("partner: PARTNER_BASE_URL unset — sign-in links can't be built");
+  }
 });
 
 export default app;

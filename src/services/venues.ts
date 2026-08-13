@@ -14,7 +14,9 @@ import type {
   Menu,
   OpeningWindow,
   Paginated,
+  PartnerVenueListItem,
   VenueDetail,
+  VenueHoursWindow,
   VenueNearby,
   VenueSort,
   VenueSummary,
@@ -423,6 +425,14 @@ const adminColumns = sql`
               'id', vp.id, 'path', vp.path, 'sortOrder', vp.sort_order
             ) ORDER BY vp.sort_order, vp.id)
             FROM venue_photos vp WHERE vp.venue_id = v.id), '[]'::json) AS admin_photos,
+  -- The whole schedule, flat, for an editor. Deliberately absent from the public projection: the
+  -- app gets isOpen/opensAt/todayHours so the open-or-not decision stays server-side.
+  COALESCE((SELECT json_agg(json_build_object(
+              'weekday', oh.weekday,
+              'opensAt', to_char(oh.opens_at, 'HH24:MI'),
+              'closesAt', to_char(oh.closes_at, 'HH24:MI')
+            ) ORDER BY oh.weekday, oh.opens_at)
+            FROM opening_hours oh WHERE oh.venue_id = v.id), '[]'::json) AS week_hours,
   -- ⚠️ NO is_available filter, unlike detailColumns. An unavailable item is hidden from members and
   -- has to be visible here, for the same reason deactivated deals are.
   COALESCE((SELECT json_agg(section ORDER BY section_order, section_id)
@@ -451,6 +461,7 @@ type AdminVenueRow = DetailRow & {
   admin_deals: AdminDeal[];
   admin_photos: Array<{ id: string; path: string; sortOrder: number }>;
   admin_menu_sections: AdminMenuSection[];
+  week_hours: VenueHoursWindow[];
 };
 
 function toAdminVenue(row: AdminVenueRow): AdminVenue {
@@ -481,6 +492,7 @@ function toAdminVenue(row: AdminVenueRow): AdminVenue {
     }),
     menuKind: row.menu_kind,
     menuSections: row.admin_menu_sections,
+    weekHours: row.week_hours,
     isPublished: row.is_published,
     partner: row.partner,
     subcategoryKeys: row.subcategory_keys,
@@ -1012,7 +1024,17 @@ export async function deleteDeal(venueId: string, dealId: string): Promise<DealR
 */
 export type VenueContentResult =
   | { ok: true; venue: AdminVenue }
-  | { ok: false; reason: "VENUE_NOT_FOUND" | "PHOTO_NOT_FOUND" };
+  | { ok: false; reason: "VENUE_NOT_FOUND" | "PHOTO_NOT_FOUND" | "PHOTO_LIMIT_REACHED" };
+
+/*
+  How many photos a venue may have.
+
+  ⚠️ Enforced HERE rather than only in the dashboard, so it applies to admin as much as to a
+  partner — this is a catalogue rule about how much of one venue a member should have to swipe
+  through, not a restriction on partners. A cap that lives only in a UI is a cap anyone can edit
+  away in devtools.
+*/
+const MAX_PHOTOS_PER_VENUE = 10;
 
 /*
   Record an already-uploaded object against a venue.
@@ -1025,6 +1047,20 @@ export type VenueContentResult =
   and quietly promoting whatever was uploaded most recently is not this function's call.
 */
 export async function addVenuePhoto(venueId: string, path: string): Promise<VenueContentResult> {
+  /*
+    Checked before the insert rather than as part of it, so "this venue doesn't exist" and "this
+    venue is full" stay distinguishable — they need different words in the UI.
+
+    ⚠️ The caller has already put the object in R2 by this point, so a refusal here leaves an
+    orphan. Both routes delete it; see the PHOTO_LIMIT_REACHED branch there.
+  */
+  const counted = await db.execute(sql`
+    SELECT count(*)::int AS n FROM venue_photos WHERE venue_id = ${venueId}
+  `);
+
+  const existing = (counted.rows[0] as { n: number } | undefined)?.n ?? 0;
+  if (existing >= MAX_PHOTOS_PER_VENUE) return { ok: false, reason: "PHOTO_LIMIT_REACHED" };
+
   const inserted = await db.execute(sql`
     INSERT INTO venue_photos (venue_id, path, sort_order)
     SELECT ${venueId}, ${path},
@@ -1189,6 +1225,263 @@ export async function replaceVenueMenu(
   const venue = await getVenueForAdmin(venueId);
   return venue ? { ok: true, venue } : { ok: false, reason: "VENUE_NOT_FOUND" };
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* Partner — the venue_owner's own venues                                                        */
+
+/*
+  ⚠️ READ THIS BEFORE ADDING ANYTHING BELOW.
+
+  Every function in this section takes a `userId` and puts it in the WHERE clause. Not in an `if`
+  after the query — in the statement. AGENTS.md is blunt about why: "Fetching a venue's stats and
+  then checking ownership is how you leak another partner's revenue through a forgotten branch."
+
+  So the shape is always the same, and there is a helper for it because a hand-written copy is a
+  hand-written copy that can be forgotten:
+
+      AND EXISTS (SELECT 1 FROM user_venues uv WHERE uv.venue_id = … AND uv.user_id = …)
+
+  The grants come from `user_venues`, NOT from `venues.partner_id`. A chain can put one manager on
+  one location — inferring scope from the company would hand that manager the whole group, and the
+  schema models the two separately for exactly this reason.
+
+  ⚠️ These are also the reason routes/partner.ts and routes/admin.ts share no code. Services are
+  data access and reusing them across both is fine; a shared gate is not.
+*/
+
+/* The scope predicate, once. `venueColumn` is whatever names the venue in the surrounding query —
+   `v.id` in a SELECT over venues, a bound id in a standalone UPDATE. */
+const grantedTo = (userId: string, venueColumn: SQL) => sql`
+  EXISTS (SELECT 1 FROM user_venues uv
+          WHERE uv.venue_id = ${venueColumn} AND uv.user_id = ${userId})
+`;
+
+/*
+  The venues this person may act on.
+
+  Ordered by name with the Romanian collation, same as everywhere else — three venues don't need a
+  sort control, but they do need to not jump around between loads.
+*/
+export async function listVenuesForPartner(userId: string): Promise<PartnerVenueListItem[]> {
+  const result = await db.execute(sql`
+    SELECT
+      v.id, v.slug, v.name, v.category_key, v.area, v.is_published,
+      (SELECT vp.path FROM venue_photos vp
+        WHERE vp.venue_id = v.id ORDER BY vp.sort_order, vp.id LIMIT 1) AS image_path,
+      (SELECT count(*)::int FROM deals d WHERE d.venue_id = v.id AND d.is_active) AS active_deal_count
+    FROM venues v
+    WHERE ${grantedTo(userId, sql`v.id`)}
+    ORDER BY v.name ${RO_COLLATE}, v.id
+  `);
+
+  return (result.rows as PartnerListRow[]).map((row) => ({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    categoryKey: row.category_key,
+    area: row.area,
+    image: assetUrl(row.image_path),
+    activeDealCount: row.active_deal_count,
+    isPublished: row.is_published,
+  }));
+}
+
+type PartnerListRow = {
+  id: string;
+  slug: string;
+  name: string;
+  category_key: string;
+  area: string;
+  is_published: boolean;
+  image_path: string | null;
+  active_deal_count: number;
+};
+
+/*
+  One venue, scoped.
+
+  Reuses the admin projection wholesale. That's deliberate: a partner editing their own venue needs
+  exactly what admin needs — photos with ids on them (you can't delete what you can't name) and
+  deactivated deals visible (or there'd be no way to switch one back on). Forking the column set to
+  shave a field would leave two projections to keep in step, and the shared ones are already
+  documented as the thing not to widen carelessly.
+
+  ⚠️ The menu aggregate comes back and is thrown away — the partner dashboard has no menu editor.
+  Same trade-off toAdminVenue already documents for the deals aggregate it overwrites: a few
+  microseconds on a single-row query, against a second projection to maintain.
+
+  Returns null for both "no such venue" and "not yours". The caller cannot tell them apart and
+  shouldn't try — see the note in routes/partner.ts.
+*/
+export async function getVenueForPartner(
+  userId: string,
+  venueId: string,
+): Promise<AdminVenue | null> {
+  const result = await db.execute(sql`
+    SELECT ${summaryColumns}, ${detailColumns}, ${adminColumns}
+    FROM venues v, ${localNow}
+    WHERE v.id = ${venueId}
+      AND ${grantedTo(userId, sql`v.id`)}
+    LIMIT 1
+  `);
+
+  const row = result.rows[0] as AdminVenueRow | undefined;
+  return row ? toAdminVenue(row) : null;
+}
+
+export type PartnerVenueResult =
+  | { ok: true; venue: AdminVenue }
+  | { ok: false; reason: "VENUE_NOT_FOUND" };
+
+/*
+  Phone and address. That is the entire list, and it is a list of two on purpose.
+
+  ⚠️ This UPDATE names two columns. It CANNOT set is_published, slug, category_key or area — not
+  "doesn't happen to", cannot. That's the whole reason it exists instead of calling
+  updateVenueForAdmin with a narrower caller: a narrower caller is one refactor away from being a
+  wider caller, whereas a statement that doesn't mention a column can never write it.
+
+  Which fields those are, and why:
+    · slug is the public /local/<slug> URL — indexed, shared, renaming costs redirects
+    · category_key and area drive the app's browse filters and the taxonomy is editorial
+    · is_published is a commercial decision, not a partner's
+
+  No constraint handling here, unlike updateVenueForAdmin. Neither column is unique and neither has
+  a foreign key, so there is nothing for the database to reject that zod hasn't already refused.
+*/
+export async function updateVenueContactForPartner(
+  userId: string,
+  venueId: string,
+  input: { phone: string | null; address: string },
+): Promise<PartnerVenueResult> {
+  const updated = await db.execute(sql`
+    UPDATE venues
+    SET phone      = ${input.phone},
+        address    = ${input.address},
+        updated_at = now()
+    WHERE id = ${venueId}
+      AND ${grantedTo(userId, sql`venues.id`)}
+    RETURNING id
+  `);
+
+  if (!updated.rows[0]) return { ok: false, reason: "VENUE_NOT_FOUND" };
+
+  const venue = await getVenueForPartner(userId, venueId);
+  return venue ? { ok: true, venue } : { ok: false, reason: "VENUE_NOT_FOUND" };
+}
+
+export type PartnerDealResult =
+  | { ok: true; venue: AdminVenue }
+  | { ok: false; reason: "VENUE_NOT_FOUND" | "DEAL_NOT_FOUND" };
+
+/*
+  Pause or resume an offer. One column.
+
+  ⚠️ A partner can switch an offer OFF and back ON. They cannot change what it says, what it's
+  worth, or whether it exists. That's a product decision, not a gap: an offer is the commercial
+  term agreed with CityDeals, and letting it be edited here means "-25% la orice pizza" quietly
+  becoming "-5%" with nothing telling us, while members keep being sold the old one.
+
+  So there is no title/condition recomposition below — nothing that feeds them can change here.
+  If that ever loosens, this function is NOT the place to widen; deal-copy.ts has to run, and
+  updateDeal already knows how.
+*/
+export async function setDealActiveForPartner(
+  userId: string,
+  venueId: string,
+  dealId: string,
+  isActive: boolean,
+): Promise<PartnerDealResult> {
+  const updated = await db.execute(sql`
+    UPDATE deals
+    SET is_active  = ${isActive},
+        updated_at = now()
+    WHERE id = ${dealId}
+      AND venue_id = ${venueId}
+      AND ${grantedTo(userId, sql`deals.venue_id`)}
+    RETURNING id
+  `);
+
+  /* The venue scope was already proved by the route's gate, so a miss here is the deal id, not the
+     venue — a stale page, or an offer admin removed while this one was open. */
+  if (!updated.rows[0]) return { ok: false, reason: "DEAL_NOT_FOUND" };
+
+  const venue = await getVenueForPartner(userId, venueId);
+  return venue ? { ok: true, venue } : { ok: false, reason: "VENUE_NOT_FOUND" };
+}
+
+/*
+  The whole opening schedule, replaced in one go.
+
+  Whole-list replace rather than a diff, same as the menu and for the same reason: a week of
+  opening hours is edited in bursts — shift the Sunday close, add a lunch break, mark Monday shut —
+  and every row is derived from array position anyway. Nothing references an opening_hours id, so
+  regenerating them costs nothing.
+
+  ⚠️ NOT scoped to a user, deliberately. This one takes a plain venueId because the route gate has
+  already proved the caller owns it, and because admin will want the same function the day it grows
+  an hours editor — it has none today, which is exactly why partners can't have their hours fixed
+  for them.
+
+  ⚠️ A window with closesAt <= opensAt is legal and means it runs past midnight. Nothing here
+  reorders, splits or "corrects" such a row; lib/hours.ts is built to read them and the whole
+  after-midnight case depends on them surviving intact.
+*/
+export async function replaceVenueHours(
+  venueId: string,
+  windows: VenueHoursWindow[],
+): Promise<PartnerVenueResult> {
+  const missing = await db.transaction(async (tx) => {
+    /* Confirms the venue exists before wiping its hours — otherwise a bad id would silently
+       delete nothing and report success. */
+    const found = await tx.execute(sql`SELECT id FROM venues WHERE id = ${venueId}`);
+    if (!found.rows[0]) return true;
+
+    await tx.execute(sql`DELETE FROM opening_hours WHERE venue_id = ${venueId}`);
+
+    for (const window of windows) {
+      await tx.execute(sql`
+        INSERT INTO opening_hours (venue_id, weekday, opens_at, closes_at)
+        VALUES (${venueId}, ${window.weekday}, ${window.opensAt}::time, ${window.closesAt}::time)
+      `);
+    }
+
+    /* The venue's own row is untouched by the loop above, so bump it here — "when did this venue
+       last change" should count a schedule change. */
+    await tx.execute(sql`UPDATE venues SET updated_at = now() WHERE id = ${venueId}`);
+
+    return false;
+  });
+
+  if (missing) return { ok: false, reason: "VENUE_NOT_FOUND" };
+
+  /* ⚠️ After the commit, never inside it. Reading within the transaction goes out on a different
+     pooled connection and answers with the pre-commit schedule — the same trap reorderVenuePhotos
+     and replaceVenueMenu both document. */
+  const venue = await getVenueForAdmin(venueId);
+  return venue ? { ok: true, venue } : { ok: false, reason: "VENUE_NOT_FOUND" };
+}
+
+/*
+  Whether this user may act on this venue at all.
+
+  Used by the route gate, and ONLY there. It is a check-then-act by nature, which is exactly the
+  pattern the header above warns against — it's acceptable in one place because what follows it are
+  the photo services, which constrain every statement to the venue id they're handed. Nothing reads
+  venue data on the strength of this alone.
+
+  ⚠️ Do not reach for this to "simplify" any of the four functions above. Their scope belongs in
+  their own WHERE clauses.
+*/
+export async function venueGrantedTo(userId: string, venueId: string): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT 1 FROM user_venues WHERE user_id = ${userId} AND venue_id = ${venueId} LIMIT 1
+  `);
+
+  return result.rows.length > 0;
+}
+
+/* ------------------------------------------------------------------------------------------- */
 
 /*
   Postgres constraint violations, as they actually reach us.

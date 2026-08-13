@@ -111,6 +111,45 @@ const schema = z.object({
     written out there: the process refuses to start rather than quietly doing the unsafe thing.
   */
   ALLOW_INSECURE_ADMIN: z.literal("yes").optional(),
+
+  /*
+    Where a partner magic link points — the ORIGIN of the partner dashboard. No path, no trailing
+    slash. `http://localhost:3003` in dev, `https://partner.<domain>` deployed.
+
+    Optional with no default because the domain isn't decided (AGENTS.md), and a hostname written
+    into this file is a grep across three repos the day it changes. Unset, a link can't be built and
+    the request-link route says so in the log instead of inventing one.
+  */
+  PARTNER_BASE_URL: z.string().url().optional(),
+
+  /*
+    ⚠️ PRINTS LIVE SIGN-IN LINKS TO THE SERVER CONSOLE. Development only, and it has to be asked for
+    out loud.
+
+    There is no mailer yet — Resend isn't wired, and wiring it needs a verified sending domain,
+    which needs the domain decision. So the only way to actually sign in today is to read the link
+    out of this service's own output.
+
+    An explicit opt-in rather than "print it when there's no mailer", for exactly the reason
+    ALLOW_INSECURE_ADMIN is explicit: the inferred version would quietly start publishing working
+    credentials into a production log stream the day a mailer config went missing, and anyone who
+    could read those logs could sign in as any partner.
+
+    Delete this the day Resend is wired.
+  */
+  LOGIN_LINK_TO_CONSOLE: z.literal("yes").optional(),
+
+  /*
+    ⚠️ Drops `Secure` from the partner session cookie. localhost only.
+
+    Browsers refuse a Secure cookie over plain http, so without this a dashboard on
+    http://localhost:3003 stores nothing: sign-in returns 200 and leaves you logged out, which
+    reads as a bug in the app rather than as a cookie flag.
+
+    Explicit opt-in, never inferred from NODE_ENV. "NODE_ENV isn't production so it's fine" is how a
+    session cookie ends up travelling in clear text on a staging box someone put on the internet.
+  */
+  ALLOW_INSECURE_COOKIE: z.literal("yes").optional(),
 });
 
 const parsed = schema.safeParse(process.env);

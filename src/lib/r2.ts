@@ -31,6 +31,17 @@ const client = new S3Client({
 /* What a browser may send. Anything else is a 415 rather than an object nobody can render. */
 export const UPLOADABLE_IMAGE_TYPES = new Set(["image/webp", "image/jpeg", "image/png"]);
 
+/*
+  8 MB. A resized WebP off either dashboard's uploader is ~150KB, so this only ever catches a client
+  that skipped the resize, or something that isn't really a photo.
+
+  ⚠️ Lives here rather than in a route file because BOTH dashboards upload photos now, and
+  routes/admin.ts and routes/partner.ts are not allowed to import from each other — AGENTS.md keeps
+  them separate deliberately, and a shared constant is how that separation starts leaking. The
+  upload rules belong next to the uploader either way.
+*/
+export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
 const EXTENSIONS: Record<string, string> = {
   "image/webp": "webp",
   "image/jpeg": "jpg",
