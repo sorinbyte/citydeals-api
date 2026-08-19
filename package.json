@@ -20,7 +20,6 @@
     "db:studio": "tsx --env-file=.env node_modules/drizzle-kit/bin.cjs studio",
     "admin:grant": "tsx --env-file=.env scripts/grant-admin.ts",
     "partner:grant": "tsx --env-file=.env scripts/grant-partner.ts",
-    "partner:link": "tsx --env-file=.env scripts/partner-link.ts",
     "assets:upload": "tsx --env-file=.env scripts/upload-assets.ts"
   },
   "dependencies": {
@@ -29,6 +28,7 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.14",
     "pg": "^8.13.1",
+    "resend": "^6.20.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

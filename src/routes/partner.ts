@@ -2,6 +2,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 
+import { loginLinkEmail, sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
 import {
   MAX_UPLOAD_BYTES,
@@ -9,6 +10,7 @@ import {
   deleteVenuePhotoObject,
   uploadVenuePhoto,
 } from "@/lib/r2";
+import { allowRequest, clientIp } from "@/lib/rate-limit";
 import {
   type PartnerSession,
   consumeLoginToken,
@@ -89,47 +91,22 @@ const sessionBody = z.object({
 });
 
 /*
-  Logs the link, or explains why it can't.
+  Mails the sign-in link.
 
-  ⚠️ TEMPORARY, and the whole reason LOGIN_LINK_TO_CONSOLE exists. Delete this function the day
-  Resend is wired — a service that prints working credentials to stdout is one config mistake away
-  from publishing them into a log aggregator.
+  ⚠️ Never throws, and the route deliberately does NOT await it — see the note there. A send failure
+  is our problem, not a signal we're allowed to hand back.
 */
-function deliverLoginLink(email: string, token: string, expiresAt: Date): void {
-  if (!env.PARTNER_BASE_URL) {
-    console.error(
-      `Login link for ${email} could not be built: PARTNER_BASE_URL is not set.`,
-      "Set it to the partner dashboard's origin (http://localhost:3003 in dev).",
-    );
-    return;
-  }
-
+async function deliverLoginLink(email: string, token: string): Promise<void> {
+  /* Trailing slashes stripped: PARTNER_BASE_URL is pasted from a browser bar as often as it's
+     typed, and `https://partner.example/` + `/acces/…` is a 404 nobody enjoys diagnosing. */
   const link = `${env.PARTNER_BASE_URL.replace(/\/+$/, "")}/acces/${token}`;
 
-  if (env.LOGIN_LINK_TO_CONSOLE !== "yes") {
-    /*
-      Nowhere to send it. The caller still gets 204 — see the route below; the alternative leaks
-      whether the address exists. So this has to be loud HERE, because it is the only place anyone
-      will ever find out that sign-in is silently doing nothing.
-    */
-    console.error(
-      `No way to deliver a login link to ${email}: no mailer is configured and`,
-      "LOGIN_LINK_TO_CONSOLE is not set. The token was created and nobody will ever see it.",
-    );
-    return;
+  const sent = await sendEmail(email, loginLinkEmail(link));
+  if (!sent) {
+    /* Loud, because the caller got a cheerful 204 and this is the only place anyone will ever find
+       out that a partner is sitting there waiting for mail that isn't coming. */
+    console.error(`login link for ${email} was minted but could not be delivered`);
   }
-
-  console.log(
-    [
-      "",
-      "┌─────────────────────────────────────────────────────────────────",
-      `│ MAGIC LINK for ${email}`,
-      `│ ${link}`,
-      `│ expires ${expiresAt.toISOString()} (single use)`,
-      "└─────────────────────────────────────────────────────────────────",
-      "",
-    ].join("\n"),
-  );
 }
 
 /*
@@ -301,6 +278,10 @@ export const partnerRoute = new Hono<PartnerEnv>()
 
     Which is also why the partner app's copy hedges ("dacă adresa … are cont"). That vagueness is
     this decision showing through to the UI, not woolly writing.
+
+    ⚠️ The rate limit below is NOT about mail volume. Every new token invalidates the previous one
+    (services/auth.ts), so without a limit anyone who knows a partner's address can lock them out of
+    their own account indefinitely by re-requesting faster than they can click.
   */
   .post("/auth/request-link", async (c) => {
     const parsed = requestLinkBody.safeParse(await c.req.json().catch(() => null));
@@ -310,13 +291,45 @@ export const partnerRoute = new Hono<PartnerEnv>()
     */
     if (!parsed.success) return c.body(null, 204);
 
-    const issued = await issueLoginToken(parsed.data.email);
+    const email = parsed.data.email;
+
+    /*
+      ⚠️ Counted BEFORE the account lookup, and applied to every well-formed address whether or not
+      it belongs to anyone. This is the whole trick: a limiter that only counted real accounts would
+      answer 429 for a partner and 204 for a stranger, which is exactly the enumeration oracle the
+      204 was designed to prevent — we'd have closed one hole by opening it somewhere louder.
+    */
+    const ip = clientIp(c.req.header("x-forwarded-for"));
+    const withinEmailLimit = allowRequest(`request-link:email:${email}`, 3, 15 * 60 * 1000);
+    /* No header at all means a direct connection (local dev). Skipped rather than bucketed under a
+       shared key, which would rate-limit the whole of localhost as if it were one attacker. */
+    const withinIpLimit = ip ? allowRequest(`request-link:ip:${ip}`, 10, 15 * 60 * 1000) : true;
+
+    if (!withinEmailLimit || !withinIpLimit) {
+      console.log(`login link rate-limited for ${email} (ip ${ip ?? "unknown"})`);
+      return c.json({ error: { code: "TOO_MANY_REQUESTS" } }, 429);
+    }
+
+    const issued = await issueLoginToken(email);
     if (issued) {
-      deliverLoginLink(parsed.data.email, issued.token, issued.expiresAt);
+      /*
+        ⚠️ Deliberately NOT awaited, and `void` says so out loud rather than leaving it looking like
+        a forgotten await.
+
+        Awaiting it would put a round trip to Resend on the known-address path and nothing on the
+        unknown one — a timing difference big enough to enumerate our partners' emails with, which
+        is the exact thing the always-204 above exists to prevent. Answering at the same speed
+        either way matters more than knowing whether the mail left before we reply.
+
+        Safe to float: sendEmail swallows everything and returns a boolean, so there's no rejection
+        to go unhandled, and this is a long-lived Node process rather than a request-scoped worker,
+        so nothing cancels it at the end of the response.
+      */
+      void deliverLoginLink(email, issued.token);
     } else {
       /* Logged, never returned. Useful when someone swears they typed it right — usually they're a
          platform_owner, or the account was suspended. */
-      console.log(`login link requested for ${parsed.data.email} — no active venue_owner`);
+      console.log(`login link requested for ${email} — no active venue_owner`);
     }
 
     return c.body(null, 204);

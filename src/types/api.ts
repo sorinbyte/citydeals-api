@@ -454,6 +454,35 @@ export type Partner = {
   createdAt: string;
 };
 
+/*
+  A venue_owner account, as the partner detail page lists them.
+
+  ⚠️ Carries no credential of any kind, and can't: `users` has no password column and invite tokens
+  are stored SHA-256 only. The plaintext link exists exactly once, in the response that mints it.
+
+  All four timestamps are ISO 8601 UTC, rendered in Europe/Bucharest. `inviteAcceptedAt === null` is
+  what "invitation still outstanding" means — the flag the resend action keys off.
+*/
+export type PartnerUserSummary = {
+  id: string;
+  email: string;
+  name: string;
+  invitedAt: string | null;
+  inviteExpiresAt: string | null;
+  inviteAcceptedAt: string | null;
+  /* Computed in SQL against the database clock. ⚠️ Don't re-derive this in a client by comparing
+     inviteExpiresAt to Date.now() — that's a hydration mismatch, and it's why the server sends it. */
+  inviteExpired: boolean;
+  lastLoginAt: string | null;
+  /* How many locations they were granted. Zero is legitimate — an owner invited before their venue
+     existed — and the partner dashboard's switcher already handles that case. */
+  venueCount: number;
+};
+
+/* The detail response carries the company's sign-in accounts; the list response deliberately
+   doesn't, since no screen renders them there. */
+export type PartnerDetail = Partner & { users: PartnerUserSummary[] };
+
 export type PartnerLead = {
   id: string;
   venueName: string;

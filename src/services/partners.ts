@@ -2,7 +2,15 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/db/client";
 import { env } from "@/lib/env";
-import type { LeadStatus, Partner, PartnerLead, PartnerStatus, PartnerVenue } from "@/types/api";
+import type {
+  LeadStatus,
+  Partner,
+  PartnerDetail,
+  PartnerLead,
+  PartnerStatus,
+  PartnerUserSummary,
+  PartnerVenue,
+} from "@/types/api";
 
 /*
   Reads and writes behind the admin dashboard.
@@ -139,20 +147,51 @@ export async function listPartners(): Promise<Partner[]> {
 }
 
 /*
-  One partner, through the same projection the list uses.
+  The people who can sign in for this company.
+
+  Detail-only, deliberately not folded into partnerColumns: the partners LIST doesn't render these
+  and would pay for the aggregate on every row for nothing.
+
+  `inviteAcceptedAt` is the one field the UI actually branches on — null means the invite is still
+  outstanding and the "resend" action applies. No token or hash goes anywhere near this projection;
+  the plaintext is readable exactly once, at the moment it's minted.
+*/
+const partnerUsersColumn = sql`
+  COALESCE((SELECT json_agg(json_build_object(
+              'id', u.id,
+              'email', u.email,
+              'name', u.name,
+              'invitedAt', u.invited_at,
+              'inviteExpiresAt', u.invite_expires_at,
+              'inviteAcceptedAt', u.invite_accepted_at,
+              /* Worked out here rather than in the browser, same reasoning as venues.isOpen: a
+                 client comparing against its own clock is a hydration mismatch waiting to happen
+                 (server render and browser render disagree), and the database already holds the
+                 only clock that matters. */
+              'inviteExpired', (u.invite_expires_at IS NOT NULL AND u.invite_expires_at < now()),
+              'lastLoginAt', u.last_login_at,
+              'venueCount', (SELECT count(*) FROM user_venues uv WHERE uv.user_id = u.id)
+            ) ORDER BY u.name)
+            FROM users u
+            WHERE u.partner_id = p.id AND u.role = 'venue_owner' AND u.status = 'active'),
+           '[]'::json) AS users
+`;
+
+/*
+  One partner, through the same projection the list uses, plus its sign-in accounts.
 
   Null rather than a throw when the id doesn't exist, so the route decides what a miss means — same
   shape as updateLeadStatus below. Deliberately NOT "find it in listPartners()": the admin page
   loads this directly on a hard refresh, and pulling every partner to return one is the kind of
   thing that's fine at thirty rows and embarrassing at three hundred.
 */
-export async function getPartner(id: string): Promise<Partner | null> {
+export async function getPartner(id: string): Promise<PartnerDetail | null> {
   const result = await db.execute(sql`
-    SELECT ${partnerColumns} FROM partners p WHERE p.id = ${id}
+    SELECT ${partnerColumns}, ${partnerUsersColumn} FROM partners p WHERE p.id = ${id}
   `);
 
-  const row = result.rows[0] as PartnerRow | undefined;
-  return row ? toPartner(row) : null;
+  const row = result.rows[0] as (PartnerRow & { users: PartnerUserSummary[] }) | undefined;
+  return row ? { ...toPartner(row), users: row.users } : null;
 }
 
 /*

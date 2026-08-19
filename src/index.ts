@@ -39,9 +39,19 @@ app.use(
       request shape that should be impossible.
     */
     allowHeaders: ["Content-Type", "Accept"],
-    /* Nothing here is cookie-authenticated — the app sends a bearer token, the dashboards call
-       server-to-server. `credentials: true` beside a reflected origin is the classic way someone
-       else's site gets to use a session. */
+    /*
+      ⚠️ Stays false, and the partner session cookie is the reason to be careful about it rather
+      than a reason to change it.
+
+      Partner auth IS cookie-based (cd_partner_session, set in routes/partner.ts). It works without
+      credentialed CORS because the browser never talks to this service cross-origin: it calls
+      /api/* on the dashboard's own origin and the Next proxy forwards from there, server-side,
+      with no Origin header in play.
+
+      So if a partner call ever fails with a CORS error, the fix is to route it through that proxy —
+      NOT to flip this to true. `credentials: true` beside a reflected origin is the classic way
+      someone else's site gets to use a logged-in partner's session.
+    */
     credentials: false,
     maxAge: 86_400,
   }),
@@ -146,24 +156,15 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   );
 
   /*
-    ⚠️ Both of these print because both are development-only holes, and a hole nobody can see is a
-    hole that ships. Same reasoning as the CORS line above: the symptom otherwise shows up
-    somewhere nobody is looking.
+    ⚠️ Prints because it's a development-only hole, and a hole nobody can see is a hole that ships.
+    Same reasoning as the CORS line above: the symptom otherwise shows up somewhere nobody is
+    looking.
   */
-  if (env.LOGIN_LINK_TO_CONSOLE === "yes") {
-    console.warn(
-      "⚠️  LOGIN_LINK_TO_CONSOLE=yes — partner magic links are printed to this console in full.",
-      "Anyone who can read these logs can sign in as any partner. Never set this in production.",
-    );
-  }
   if (env.ALLOW_INSECURE_COOKIE === "yes") {
     console.warn(
       "⚠️  ALLOW_INSECURE_COOKIE=yes — the partner session cookie is sent without Secure,",
       "so it travels in clear text over http. localhost only.",
     );
-  }
-  if (!env.PARTNER_BASE_URL) {
-    console.log("partner: PARTNER_BASE_URL unset — sign-in links can't be built");
   }
 });
 

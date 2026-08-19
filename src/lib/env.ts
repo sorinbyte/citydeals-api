@@ -116,28 +116,32 @@ const schema = z.object({
     Where a partner magic link points — the ORIGIN of the partner dashboard. No path, no trailing
     slash. `http://localhost:3003` in dev, `https://partner.<domain>` deployed.
 
-    Optional with no default because the domain isn't decided (AGENTS.md), and a hostname written
-    into this file is a grep across three repos the day it changes. Unset, a link can't be built and
-    the request-link route says so in the log instead of inventing one.
+    No default because the domain isn't decided (AGENTS.md), and a hostname written into this file
+    is a grep across three repos the day it changes.
+
+    Required, not optional — it used to be optional back when there was no mailer and an unbuildable
+    link was merely logged. Now it's the difference between a partner getting a working link and
+    getting nothing, silently, with a 204 that says everything went fine. Fail at boot instead.
   */
-  PARTNER_BASE_URL: z.string().url().optional(),
+  PARTNER_BASE_URL: z.string().url(),
 
   /*
-    ⚠️ PRINTS LIVE SIGN-IN LINKS TO THE SERVER CONSOLE. Development only, and it has to be asked for
-    out loud.
+    Resend. The only mail path there is.
 
-    There is no mailer yet — Resend isn't wired, and wiring it needs a verified sending domain,
-    which needs the domain decision. So the only way to actually sign in today is to read the link
-    out of this service's own output.
-
-    An explicit opt-in rather than "print it when there's no mailer", for exactly the reason
-    ALLOW_INSECURE_ADMIN is explicit: the inferred version would quietly start publishing working
-    credentials into a production log stream the day a mailer config went missing, and anyone who
-    could read those logs could sign in as any partner.
-
-    Delete this the day Resend is wired.
+    Required rather than optional-with-a-fallback on purpose. The optional shape means a missing key
+    turns sign-in into a black hole: tokens get minted, 204s come back, and no partner can ever get
+    in — with nothing failing loudly enough to notice. Same posture as ADMIN_API_SECRET.
   */
-  LOGIN_LINK_TO_CONSOLE: z.literal("yes").optional(),
+  RESEND_API_KEY: z.string().min(1),
+
+  /*
+    The From header, e.g. `Crunch <noreply@crunchapp.ro>`. Display name optional, address isn't.
+
+    ⚠️ In env rather than a constant for the usual reason: AGENTS.md forbids a hardcoded hostname
+    anywhere in this repo, and an email address is a hostname wearing a hat. The sending domain must
+    also be verified in Resend or every send 403s.
+  */
+  EMAIL_FROM: z.string().min(1),
 
   /*
     ⚠️ Drops `Secure` from the partner session cookie. localhost only.

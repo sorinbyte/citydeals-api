@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { type AccessIdentity, createAccessVerifier } from "@/lib/access";
+import { inviteEmail, sendEmail } from "@/lib/email";
 import { adminIdentityEnabled, env } from "@/lib/env";
 import {
   MAX_UPLOAD_BYTES,
@@ -20,7 +21,7 @@ import {
   updateLeadStatus,
   updatePartner,
 } from "@/services/partners";
-import { findPlatformOwnerByEmail } from "@/services/users";
+import { createPartnerUser, findPlatformOwnerByEmail, resendPartnerInvite } from "@/services/users";
 import {
   addVenuePhoto,
   createDeal,
@@ -106,6 +107,35 @@ const leadPatchBody = z.object({
   when the honest answer is "that isn't an id". A bad link should read as a bad link.
 */
 const idParam = z.string().uuid();
+
+/*
+  A new venue_owner. `.strict()` like every other body here, so a smuggled `role` or `status` is a
+  400 that names the key rather than something that quietly does nothing.
+
+  ⚠️ No `role` field, and there must never be one. This endpoint mints venue_owners; the ability to
+  create a platform_owner over HTTP is not a feature we want, and `grant-admin.ts` stays a script
+  precisely so making another admin takes deliberate effort at a terminal.
+*/
+const partnerUserBody = z
+  .object({
+    partnerId: z.string().uuid(),
+    email: z.string().trim().toLowerCase().email(),
+    name: z.string().trim().min(2).max(120),
+    /* A list from day one — restaurant groups with several locations are the normal case, not the
+       exception, and an owner with zero venues is legitimate too (invited before their venue was
+       set up). The partner dashboard's switcher already handles zero, one and many. */
+    venueIds: z.array(z.string().uuid()).max(50).default([]),
+  })
+  .strict();
+
+/*
+  Where an invite lands. `/invite/`, not `/acces/` — English on purpose, because AGENTS.md writes
+  that URL literally and the partner app serves both paths with different copy: "we're setting up
+  your account" versus "signing you in".
+*/
+function inviteLink(token: string): string {
+  return `${env.PARTNER_BASE_URL.replace(/\/+$/, "")}/invite/${token}`;
+}
 
 /*
   A venue's editable fields. Not its photos, deals, menu or hours — those are collections with
@@ -537,6 +567,81 @@ export const adminRoute = new Hono<AdminEnv>()
     }
 
     return c.json(result.partner);
+  })
+
+  /*
+    Creates a venue_owner and mails them an invite.
+
+    ⚠️ This is the only way a partner account gets created from a browser, and there is deliberately
+    no public counterpart — venue owners never self-register (AGENTS.md). The curated network is the
+    product; a signup form would also hand us a venue-verification problem we've chosen not to have.
+
+    201 with the invite's expiry so admin can show "invitation valid until …" rather than making
+    someone count seven days forward.
+  */
+  .post("/partner-users", async (c) => {
+    const parsed = partnerUserBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_BODY", details: parsed.error.flatten() } }, 400);
+    }
+
+    const result = await createPartnerUser(parsed.data);
+
+    if (!result.ok) {
+      /* 409 for the two "the world already contains this" cases, 400 for a payload that names a
+         venue belonging to someone else. Admin words all three differently. */
+      const status = result.reason === "VENUE_NOT_OWNED" ? 400 : 409;
+      return c.json({ error: { code: result.reason } }, status);
+    }
+
+    const link = inviteLink(result.invite.token);
+    const sent = await sendEmail(
+      result.user.email,
+      inviteEmail(link, result.companyName, result.invite.expiresAt),
+    );
+
+    /*
+      ⚠️ The account exists either way — the transaction already committed, and rolling it back
+      because a mail bounced would be worse than the alternative. Report the failure instead so
+      admin can offer "resend" rather than pretending the invite is in flight.
+    */
+    return c.json(
+      {
+        user: result.user,
+        companyName: result.companyName,
+        inviteExpiresAt: result.invite.expiresAt.toISOString(),
+        inviteSent: sent,
+      },
+      201,
+    );
+  })
+
+  /* A fresh invite for someone who never used theirs. Seven-day expiry plus a restaurant inbox
+     means the first mail gets lost often enough that this is not an edge case. */
+  .post("/partner-users/:id/resend-invite", async (c) => {
+    const id = idParam.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    const result = await resendPartnerInvite(id.data);
+
+    if (!result.ok) {
+      return c.json(
+        { error: { code: result.reason } },
+        result.reason === "USER_NOT_FOUND" ? 404 : 409,
+      );
+    }
+
+    const link = inviteLink(result.invite.token);
+    const sent = await sendEmail(
+      result.user.email,
+      inviteEmail(link, result.companyName, result.invite.expiresAt),
+    );
+
+    return c.json({
+      user: result.user,
+      inviteExpiresAt: result.invite.expiresAt.toISOString(),
+      inviteSent: sent,
+    });
   })
 
   /*
