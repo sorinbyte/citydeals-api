@@ -4,3 +4,4 @@ export * from "@/db/schema/columns";
 export * from "@/db/schema/identity";
 export * from "@/db/schema/menu";
 export * from "@/db/schema/partners";
+export * from "@/db/schema/redemptions";

@@ -57,6 +57,13 @@
       "when": 1786488425204,
       "tag": "0007_ancient_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790701837573,
+      "tag": "0008_member_auth_and_redemptions",
+      "breakpoints": true
     }
   ]
 }

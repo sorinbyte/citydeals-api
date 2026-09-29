@@ -20,6 +20,7 @@
     "db:studio": "tsx --env-file=.env node_modules/drizzle-kit/bin.cjs studio",
     "admin:grant": "tsx --env-file=.env scripts/grant-admin.ts",
     "partner:grant": "tsx --env-file=.env scripts/grant-partner.ts",
+    "venue:pin": "tsx --env-file=.env scripts/set-venue-pin.ts",
     "assets:upload": "tsx --env-file=.env scripts/upload-assets.ts"
   },
   "dependencies": {

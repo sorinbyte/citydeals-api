@@ -6,6 +6,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -272,5 +273,81 @@ export const members = pgTable(
     uniqueIndex("members_phone_key").on(t.phone),
     // drives the "trial expiră în 3z" segment on the admin members page
     index("members_trial_ends_idx").on(t.trialEndsAt),
+  ],
+);
+
+/*
+  Live member sessions. The app's half of `sessions` above.
+
+  A separate table rather than a nullable `member_id` on `sessions`, for exactly the reason this
+  file opens with: `sessions.user_id` is NOT NULL, so merging them means every row carries a null
+  for one side plus a check constraint to keep it honest. Same split, same reasoning.
+
+  ⚠️ The token travels in an Authorization header, not a cookie — the client is a phone, there is no
+  browser and no origin, so none of the cookie machinery above applies. It lands in
+  expo-secure-store on the device and SHA-256 here, same rule as everything else in this file.
+*/
+export const memberSessions = pgTable(
+  "member_sessions",
+  {
+    id: id(),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    /*
+      Long — 180 days, against the partner dashboard's 30.
+
+      A dashboard opened once a month can afford to ask again; a member cannot, because the moment
+      the session lapses is the moment they're standing at a counter with a waiter waiting. It stays
+      revocable because it's a row, which is the whole argument for a table over a signed token.
+    */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("member_sessions_hash_key").on(t.tokenHash),
+    /* "End every session this member has" — sign-out-everywhere, and what a lost phone needs. */
+    index("member_sessions_member_idx").on(t.memberId),
+  ],
+);
+
+/*
+  Phone verification codes. The thing that creates a member.
+
+  ⚠️ `phone` is deliberately NOT a foreign key. The member row doesn't exist yet — verification is
+  what brings it into being (see the members comment above: "just installed" is the absence of a
+  row). A FK here would make it impossible to verify anyone for the first time.
+
+  The code is hashed, but with SHA-256 rather than the scrypt the venue PIN gets, and the difference
+  is worth stating because both are short numbers. A slow hash buys time against an OFFLINE attack
+  on a stolen table. This secret is dead in five minutes and capped at five attempts, so there's no
+  offline attack worth paying per-verify latency for. The PIN has no expiry at all, which is what
+  makes it the opposite case.
+*/
+export const phoneVerifications = pgTable(
+  "phone_verifications",
+  {
+    id: id(),
+    // E.164, +40 only, normalised before it gets here — a prettified number is one no lookup matches
+    phone: text("phone").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /* Same "recorded, not deleted" rule as login_tokens: it lets "already used" and "never existed"
+       stay different answers, and the first one happens honestly when someone double-taps submit. */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    /*
+      Wrong guesses against THIS code. Capped in the service, and the cap is what makes a 6-digit
+      secret safe — without it a million requests walks the whole space in minutes.
+
+      On the row rather than in the in-memory limiter on purpose: that one is per-process and resets
+      on every deploy, and "redeploy to get more guesses" is not a property you want here.
+    */
+    attempts: smallint("attempts").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    /* Finding the live code for a number, newest first — the only read this table has. */
+    index("phone_verifications_phone_idx").on(t.phone, t.createdAt.desc()),
   ],
 );

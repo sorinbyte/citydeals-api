@@ -1379,7 +1379,7 @@ export type PartnerDealResult =
 
   ⚠️ A partner can switch an offer OFF and back ON. They cannot change what it says, what it's
   worth, or whether it exists. That's a product decision, not a gap: an offer is the commercial
-  term agreed with CityDeals, and letting it be edited here means "-25% la orice pizza" quietly
+  term agreed with Crunch, and letting it be edited here means "-25% la orice pizza" quietly
   becoming "-5%" with nothing telling us, while members keep being sold the old one.
 
   So there is no title/condition recomposition below — nothing that feeds them can change here.

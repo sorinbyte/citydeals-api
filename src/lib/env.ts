@@ -154,6 +154,33 @@ const schema = z.object({
     session cookie ends up travelling in clear text on a staging box someone put on the internet.
   */
   ALLOW_INSECURE_COOKIE: z.literal("yes").optional(),
+
+  /*
+    Where a redemption QR points — the ORIGIN of the redeem app. No path, no trailing slash.
+    `http://<LAN-IP>:3004` in dev, `https://crunchapp.ro` deployed.
+
+    ⚠️ It is baked into a QR that a member may already have on screen, so changing it mid-flight
+    invalidates nothing but strands whatever was scanned a second earlier. Not a value to fiddle
+    with on a live service.
+
+    In env rather than a constant for the usual reason — AGENTS.md forbids a hardcoded hostname
+    anywhere in this repo.
+  */
+  REDEEM_BASE_URL: z.string().url(),
+
+  /*
+    ⚠️ THE ONLY WAY TO SIGN IN WITHOUT SMS, and like ALLOW_INSECURE_ADMIN it has to be asked for
+    out loud.
+
+    No SMS provider is wired yet, so with this unset `deliverPhoneCode` logs an error and nobody can
+    verify a number. With it set, the code is logged to stdout and echoed back in the response so a
+    simulator or a laptop can get through.
+
+    Explicit opt-in rather than "if no provider is configured, echo the code", because that shape
+    means one missing variable in a deployed environment quietly turns phone verification into a
+    formality — the anti-fraud anchor of the entire product, off, with nothing in the logs.
+  */
+  ALLOW_INSECURE_OTP: z.literal("yes").optional(),
 });
 
 const parsed = schema.safeParse(process.env);

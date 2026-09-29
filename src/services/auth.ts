@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/db/client";
+import { toDate } from "@/lib/rows";
 import { generateToken, hashToken } from "@/lib/tokens";
 
 /*
@@ -37,20 +38,6 @@ const INVITE_TOKEN_TTL_DAYS = 7;
 const SESSION_TTL_DAYS = 30;
 
 export type TokenPurpose = "login" | "invite";
-
-/*
-  ⚠️ `db.execute` hands back raw node-postgres rows, and a timestamptz in one of those is a STRING,
-  not a Date — the typed query builder converts, this path doesn't.
-
-  Worth a helper rather than a cast because the cast is what bit: annotating the row as
-  `{ expires_at: Date }` compiles perfectly and then throws "toISOString is not a function" at
-  runtime, in the caller, well away from the query that actually produced it.
-*/
-function toDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  if (typeof value === "string") return new Date(value);
-  throw new Error(`expected a timestamp, got ${typeof value}`);
-}
 
 /* Who a session belongs to, plus everything the dashboard needs to render its chrome. One query
    rather than three, because every authenticated request pays for it. */

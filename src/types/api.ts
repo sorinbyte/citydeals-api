@@ -501,6 +501,88 @@ export type PartnerLead = {
   createdAt: string;
 };
 
+/* ------------------------------------------------------------------------------------------- *
+   Member-facing: who is signed in on the phone, and the redemption flow.
+
+   Everything below is read by the mobile app and, for the two Redeem* shapes, by the redeem page a
+   venue employee opens after scanning. Nothing here is ever served to the marketing site.
+ * ------------------------------------------------------------------------------------------- */
+
+/*
+  The signed-in member, as the app sees itself.
+
+  ⚠️ No token in here — the session token comes back once from the verify call and never again. And
+  no redemption history: the app has no screen for it, and a list of where someone eats is not
+  something to ship to a device by default.
+*/
+export type MemberProfile = {
+  id: string;
+  phone: string;
+  name: string | null;
+  /* Decided server-side against server time, same rule as isOpen. The app never compares dates. */
+  trialState: MemberTrialState;
+  trialEndsAt: string | null;
+};
+
+export type MemberSession = {
+  token: string;
+  expiresAt: string;
+  member: MemberProfile;
+};
+
+/*
+  What the member's phone shows at the counter.
+
+  `url` is the whole QR payload, composed server-side from REDEEM_BASE_URL — the app never builds
+  it, for the same reason it never builds an image URL: a shipped build that composes its own
+  hostname keeps pointing at a dead one forever.
+*/
+export type IssuedRedemption = {
+  id: string;
+  url: string;
+  /* The typed fallback, for when the scan won't work. Grouped for reading aloud, e.g. "K7M-2QX". */
+  shortCode: string;
+  expiresAt: string;
+  venueName: string;
+  dealTitle: string;
+};
+
+/*
+  Live / used / expired / voided — derived, never stored. The app polls this while the code is on
+  screen so it can go quiet the moment a waiter confirms it.
+*/
+export type RedemptionState = "live" | "used" | "expired" | "voided";
+
+export type RedemptionStatus = {
+  id: string;
+  state: RedemptionState;
+  expiresAt: string;
+  consumedAt: string | null;
+};
+
+/*
+  What the redeem page renders before anyone has proved anything.
+
+  ⚠️ Deliberately says nothing about the member. Whoever scanned is unauthenticated at this point —
+  they could be staff, or they could be the person at the next table — so this is venue and deal
+  only. Both are public catalogue data already.
+*/
+export type RedeemView = {
+  state: RedemptionState;
+  venue: { id: string; name: string };
+  deal: { title: string; condition: string; type: DealType };
+  /* False once this browser has proved the PIN, which is what makes the second scan one tap. */
+  pinRequired: boolean;
+};
+
+/* The confirmation the venue's screen shows, and the only celebratory state in the whole flow —
+   the member's phone deliberately gets nothing like it. */
+export type RedeemConfirmation = {
+  venue: { id: string; name: string };
+  deal: { title: string; condition: string; type: DealType };
+  consumedAt: string;
+};
+
 /*
   Errors carry a stable machine-readable code; the client owns the sentence. Renaming a code is a
   breaking change in three repos, same as renaming a field.
@@ -537,7 +619,58 @@ export type ApiError = {
       | "UPLOAD_FAILED"
       | "PARTNER_NOT_FOUND"
       | "LEAD_NOT_FOUND"
-      | "ACTING_ADMIN_MISSING";
+      | "ACTING_ADMIN_MISSING"
+
+      /*
+        Partner auth. These were returned by routes/partner.ts and services/auth.ts long before they
+        were declared here — the union had drifted. Written down now, because the whole point of
+        this file is that it's the one place three repos agree on.
+      */
+      | "UNAUTHENTICATED"
+      | "FORBIDDEN"
+      | "TOO_MANY_REQUESTS"
+      /* A magic link that never existed, has lapsed, or was already clicked. Three codes because the
+         partner app words them differently — only one of them sounds like a fault. */
+      | "TOKEN_INVALID"
+      | "TOKEN_EXPIRED"
+      | "TOKEN_USED"
+
+      /* Member phone verification. */
+      | "PHONE_INVALID"
+      | "CODE_INVALID"
+      | "CODE_EXPIRED"
+      /* Too many wrong guesses at one code. Distinct from TOO_MANY_REQUESTS, which is about asking
+         for codes too often — the member's next move differs: wait, versus start over. */
+      | "TOO_MANY_ATTEMPTS"
+
+      /*
+        Redemption eligibility. TRIAL_REQUIRED means they never started one, TRIAL_EXPIRED means it
+        ran out — two codes because the app's answer is "începe perioada de probă" versus
+        "reactivează", and a single code would have to pick one and be wrong half the time.
+      */
+      | "TRIAL_REQUIRED"
+      | "TRIAL_EXPIRED"
+      /* Used this deal too recently. `details` carries { availableAt } so the client can say when. */
+      | "DEAL_ON_COOLDOWN"
+      | "DEAL_INACTIVE"
+
+      /*
+        Redeeming, from the venue's side. NOT_FOUND / EXPIRED / USED / VOIDED are deliberately four
+        answers rather than one: the employee holding the phone needs to know whether to ask the
+        member to generate a new code, or to stop and call someone.
+      */
+      | "REDEMPTION_NOT_FOUND"
+      | "REDEMPTION_EXPIRED"
+      | "REDEMPTION_USED"
+      | "REDEMPTION_VOIDED"
+      /* Scanned at a venue the code wasn't issued for — someone walked next door. */
+      | "REDEMPTION_WRONG_VENUE"
+      | "PIN_INVALID"
+      /* Too many wrong PINs at this venue. Enrolled devices keep working; see venue_devices. */
+      | "PIN_LOCKED"
+      /* The venue has no PIN configured, so it cannot confirm anything yet. An onboarding gap, not
+         a mistake by whoever is holding the phone — the copy has to say so. */
+      | "PIN_NOT_SET";
     /* Field-level detail for INVALID_QUERY / INVALID_BODY. Developer-facing, never shown to a
        member. */
     details?: unknown;

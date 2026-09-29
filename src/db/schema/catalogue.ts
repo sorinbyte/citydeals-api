@@ -139,6 +139,35 @@ export const venues = pgTable(
       wrong the moment it's written.
     */
     isPublished: boolean("is_published").notNull().default(true),
+
+    /*
+      The 4-digit code a venue employee types to confirm a redemption.
+
+      ⚠️ NONE of these four columns may ever reach a public response. `summaryColumns` in
+      services/venues.ts is shared by list, detail AND nearby, so one careless addition there
+      publishes every venue's PIN hash to the marketing site. Same trap partner_id already carries.
+
+      scrypt, not SHA-256, and this is the exact opposite call to the one in identity.ts. Four digits
+      is ten thousand possibilities — genuinely brute-forceable — and unlike a phone code this one
+      has no expiry, so an attacker gets unlimited time. The slow hash is what makes each guess cost
+      something. It is NOT sufficient on its own; see services/venue-pin.ts for the other two layers.
+
+      Null means the venue has no PIN yet and cannot confirm anything. That's a real state — all 30
+      seeded venues are in it — and the redeem page says so rather than failing as "wrong PIN".
+    */
+    pinHash: text("pin_hash"),
+    pinSetAt: timestamp("pin_set_at", { withTimezone: true }),
+    /*
+      Wrong guesses since the last success, and how long the PIN is refused for.
+
+      ⚠️ A per-venue lockout is a denial of service on a working counter — anyone who can reach the
+      page can lock a restaurant out by guessing badly twenty times. It's only acceptable because an
+      enrolled device skips the PIN entirely, so the phones already behind the bar keep working right
+      through it. Don't remove venue_devices without revisiting this.
+    */
+    pinFailedCount: smallint("pin_failed_count").notNull().default(0),
+    pinLockedUntil: timestamp("pin_locked_until", { withTimezone: true }),
+
     ...timestamps,
   },
   (t) => [

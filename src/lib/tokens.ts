@@ -21,9 +21,22 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
   base64url rather than hex: same entropy in 43 characters instead of 64, and it survives being a
   path segment untouched — no percent-encoding to get wrong on either side of the link.
 */
-export function generateToken(): string {
-  return randomBytes(32).toString("base64url");
+export function generateToken(bytes = 32): string {
+  return randomBytes(bytes).toString("base64url");
 }
+
+/*
+  16 bytes — 128 bits, 22 characters — for the one token that goes into a QR code.
+
+  Every character makes the QR denser, and density is the difference between a waiter's camera
+  reading it off a dim phone at arm's length and them asking the member to turn the brightness up.
+  128 bits is still far past guessable: the codes die in fifteen minutes and there are never more
+  than a handful alive, so an attacker is guessing a 22-character string against a set of maybe ten.
+
+  Separate from the 32-byte default rather than just shortening that, because sessions and magic
+  links have no reason to give up entropy and nothing to gain from it.
+*/
+export const REDEMPTION_TOKEN_BYTES = 16;
 
 /*
   SHA-256, hex.

@@ -7,7 +7,9 @@ import { pool } from "@/db/client";
 import { corsAllowedOrigins, env } from "@/lib/env";
 import { adminRoute } from "@/routes/admin";
 import { categoriesRoute } from "@/routes/categories";
+import { memberRoute } from "@/routes/member";
 import { partnerRoute } from "@/routes/partner";
+import { redeemRoute } from "@/routes/redeem";
 import { venuesRoute } from "@/routes/venues";
 
 const app = new Hono();
@@ -83,6 +85,19 @@ app.get("/", (c) =>
       "PATCH /v1/partner/venues/:id/contact (session cookie)",
       "PATCH /v1/partner/venues/:id/deals/:dealId (session cookie)",
       "POST|DELETE /v1/partner/venues/:id/photos (session cookie)",
+      "POST /v1/member/auth/request-code",
+      "POST /v1/member/auth/verify",
+      "GET /v1/member/me (bearer)",
+      "POST /v1/member/trial (bearer)",
+      "POST /v1/member/redemptions (bearer)",
+      "GET|DELETE /v1/member/redemptions/:id (bearer)",
+      /* The venue's side of a redemption. Public by design — a waiter scans with whatever phone is
+         behind the bar and has no account to sign into. What guards it is the 128-bit token in the
+         path and the venue PIN, not obscurity. */
+      "GET /v1/redeem/:token",
+      "POST /v1/redeem/:token/confirm",
+      "POST /v1/redeem/by-code (device cookie)",
+      "DELETE /v1/redeem/device",
       "GET|POST /v1/admin/partners (admin secret)",
       "GET /v1/admin/partner-leads (admin secret)",
       "PATCH /v1/admin/partner-leads/:id (admin secret)",
@@ -128,6 +143,20 @@ v1.route("/admin", adminRoute);
    exactly the ones you reach without a session. Shares no gate, no middleware and no helper with
    /v1/admin above; see the note at the top of routes/partner.ts. */
 v1.route("/partner", partnerRoute);
+/* The mobile app. Bearer tokens, not cookies — the client is a phone, so there is no origin, no
+   CSRF and nothing for SameSite to mean. Gated per route inside the file; the two auth endpoints
+   under it are the ones you reach without a token. */
+v1.route("/member", memberRoute);
+/*
+  The venue side of a redemption. Entirely public — no session, no account, nothing to install,
+  because the alternative is onboarding every employee of every partner and hospitality turnover
+  would make that a permanent job.
+
+  ⚠️ Called server-side by the redeem app's own proxy, never from a browser directly. That's what
+  keeps the device cookie host-only on the redeem app's origin, and why adding this route needed no
+  change to the CORS allowlist above.
+*/
+v1.route("/redeem", redeemRoute);
 
 app.route("/v1", v1);
 
