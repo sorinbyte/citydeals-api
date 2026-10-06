@@ -89,6 +89,9 @@ app.get("/", (c) =>
       "POST /v1/member/auth/verify",
       "GET /v1/member/me (bearer)",
       "POST /v1/member/trial (bearer)",
+      "GET /v1/member/favourites (bearer)",
+      "GET /v1/member/favourites/ids (bearer)",
+      "PUT|DELETE /v1/member/favourites/:venueId (bearer)",
       "POST /v1/member/redemptions (bearer)",
       "GET|DELETE /v1/member/redemptions/:id (bearer)",
       /* The venue's side of a redemption. Public by design — a waiter scans with whatever phone is

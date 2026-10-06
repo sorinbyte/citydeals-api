@@ -6,6 +6,7 @@ import { db } from "@/db/client";
 import { env } from "@/lib/env";
 import { REDEMPTION_TOKEN_BYTES, generateToken, hashToken } from "@/lib/tokens";
 import type {
+  DealCooldown,
   DealType,
   IssuedRedemption,
   RedeemConfirmation,
@@ -360,6 +361,37 @@ export async function voidRedemption(memberId: string, redemptionId: string): Pr
       AND consumed_at IS NULL
       AND voided_at IS NULL
   `);
+}
+
+/*
+  Which of this member's deals are still inside their refresh window, and when each frees up.
+
+  ⚠️ A member-scoped endpoint rather than a field on the venue payload, and that's deliberate. The
+  catalogue reads are public, cacheable and identical for everybody; adding "have YOU used this"
+  to them would make every response member-specific and quietly kill the caching on the most-fetched
+  thing in the product. This is one small query the app merges client-side.
+
+  Typically a handful of rows — a member can only be on cooldown for deals they've actually used.
+
+  ⚠️ Returns the DATE, not a day count. A number would be wrong within hours of being sent, and the
+  client can format a date into "în 3 zile" perfectly well. Deciding whether a deal is blocked stays
+  here; saying it prettily is the app's job.
+*/
+export async function listCooldowns(memberId: string): Promise<DealCooldown[]> {
+  const result = await db.execute(sql`
+    SELECT r.deal_id,
+           to_json(max(r.consumed_at) + d.refresh_days * interval '1 day')#>>'{}' AS available_at
+    FROM redemptions r
+    JOIN deals d ON d.id = r.deal_id
+    WHERE r.member_id = ${memberId} AND r.consumed_at IS NOT NULL
+    GROUP BY r.deal_id, d.refresh_days
+    HAVING max(r.consumed_at) + d.refresh_days * interval '1 day' > now()
+  `);
+
+  return (result.rows as Array<{ deal_id: string; available_at: string }>).map((row) => ({
+    dealId: row.deal_id,
+    availableAt: row.available_at,
+  }));
 }
 
 /* ------------------------------------------------------------------------------------------- */

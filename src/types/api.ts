@@ -551,6 +551,18 @@ export type IssuedRedemption = {
   Live / used / expired / voided — derived, never stored. The app polls this while the code is on
   screen so it can go quiet the moment a waiter confirms it.
 */
+/*
+  A deal this member used too recently to use again, and when it frees up.
+
+  ⚠️ A date, never a day count. "3 days left" is wrong a few hours after we send it; a timestamp
+  stays true and the client formats it. Same reasoning as sending `opensAt` rather than "opens in
+  2h" on a venue.
+*/
+export type DealCooldown = {
+  dealId: string;
+  availableAt: string;
+};
+
 export type RedemptionState = "live" | "used" | "expired" | "voided";
 
 export type RedemptionStatus = {

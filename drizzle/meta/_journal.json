@@ -64,6 +64,13 @@
       "when": 1790701837573,
       "tag": "0008_member_auth_and_redemptions",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790719029599,
+      "tag": "0009_favourites",
+      "breakpoints": true
     }
   ]
 }

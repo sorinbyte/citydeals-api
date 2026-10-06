@@ -181,6 +181,25 @@ const schema = z.object({
     formality — the anti-fraud anchor of the entire product, off, with nothing in the logs.
   */
   ALLOW_INSECURE_OTP: z.literal("yes").optional(),
+
+  /*
+    SMSO (smso.ro) — the verification codes.
+
+    A Romanian gateway rather than Twilio: roughly half the price per message for +40 traffic, which
+    is the only traffic this product has. We use the sending half only — the code itself is minted,
+    hashed and checked in services/member-auth.ts, so no provider ever holds the one secret that
+    decides whether someone gets an account.
+
+    `SMSO_SENDER_ID` is an integer, not a name. Senders are registered in their dashboard and listed
+    at GET /api/v1/senders; the id is what the send endpoint takes.
+
+    ⚠️ Optional in the schema but NOT optional in practice — the boot assertion below refuses to
+    start without them unless ALLOW_INSECURE_OTP is set. Same posture as the Cloudflare Access pair:
+    a missing credential has to stop the process, because the alternative is phone verification
+    silently becoming a formality.
+  */
+  SMSO_API_KEY: z.string().min(1).optional(),
+  SMSO_SENDER_ID: z.coerce.number().int().positive().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -224,7 +243,46 @@ if (!accessConfigured && parsed.data.ALLOW_INSECURE_ADMIN !== "yes") {
   );
 }
 
+/*
+  SMS is configured, or the process refuses to start.
+
+  ⚠️ The failure this prevents is the quiet one: deploying with no SMSO key, every sign-up minting a
+  code that is never delivered, and 204s coming back from the endpoint exactly as they do on a good
+  day. Nobody can create an account and nothing anywhere says why — the route can't report it,
+  because an endpoint that answers differently when delivery fails is one that enumerates phone
+  numbers.
+
+  Both or neither, like the Access pair. A key with no sender id is a half-configured client that
+  would fail on the first send instead of at boot.
+*/
+const smsConfigured =
+  parsed.data.SMSO_API_KEY !== undefined && parsed.data.SMSO_SENDER_ID !== undefined;
+const smsPartiallyConfigured =
+  !smsConfigured &&
+  (parsed.data.SMSO_API_KEY !== undefined || parsed.data.SMSO_SENDER_ID !== undefined);
+
+if (smsPartiallyConfigured) {
+  throw new Error(
+    "Invalid environment: SMSO_API_KEY and SMSO_SENDER_ID must be set together. " +
+      "A key with no sender id fails on the first send instead of at boot.",
+  );
+}
+
+if (!smsConfigured && parsed.data.ALLOW_INSECURE_OTP !== "yes") {
+  throw new Error(
+    "Refusing to start: phone verification has no way to deliver a code.\n\n" +
+      "Set SMSO_API_KEY and SMSO_SENDER_ID (smso.ro → developer page, and GET /api/v1/senders " +
+      "for the id), or set ALLOW_INSECURE_OTP=yes for local development.\n\n" +
+      "Never set ALLOW_INSECURE_OTP in a deployed environment — it echoes the code in the response " +
+      "and makes phone verification, the anti-fraud anchor of the product, a formality.",
+  );
+}
+
 export const env = parsed.data;
+
+/* Whether codes can actually be delivered. Exported so lib/sms.ts and the boot check can't drift
+   apart about what "configured" means. */
+export const smsEnabled = smsConfigured;
 
 /*
   Whether /v1/admin can identify its caller. False only on a localhost run that opted in above.

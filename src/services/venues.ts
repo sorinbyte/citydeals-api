@@ -241,6 +241,61 @@ export async function listVenues({
   };
 }
 
+/*
+  A member's saved venues, newest first.
+
+  ⚠️ Lives here rather than in services/favourites.ts on purpose. This returns a VenueSummary, and
+  `summaryColumns` above is the single definition of what one looks like on the wire — exporting it
+  so another file could assemble venue payloads is exactly how a second, subtly-different venue
+  projection comes to exist. Everything that decides the shape of a venue stays in this file; the
+  favourites file owns the membership, which is a different question.
+*/
+export async function listFavouriteVenues({
+  memberId,
+  page,
+  perPage = PER_PAGE,
+}: {
+  memberId: string;
+  page: number;
+  perPage?: number;
+}): Promise<Paginated<VenueSummary>> {
+  const offset = (page - 1) * perPage;
+
+  /*
+    ⚠️ `v.is_published` is a filter, not a nicety. A venue pulled from the platform must not keep
+    appearing in someone's saved list — and the row deliberately survives, so that unpublishing
+    something temporarily doesn't silently delete favourites we'd have to ask members to rebuild.
+  */
+  const [rows, counted] = await Promise.all([
+    db.execute(sql`
+      SELECT ${summaryColumns}
+      FROM member_favourites f
+      JOIN venues v ON v.id = f.venue_id, ${localNow}
+      WHERE f.member_id = ${memberId} AND v.is_published
+      ORDER BY f.created_at DESC
+      LIMIT ${perPage} OFFSET ${offset}
+    `),
+    /* Same filters, or totalPages describes a list the member never sees and page 2 is a gap —
+       the failure `perPage` produced once already. */
+    db.execute(sql`
+      SELECT count(*)::int AS total
+      FROM member_favourites f
+      JOIN venues v ON v.id = f.venue_id
+      WHERE f.member_id = ${memberId} AND v.is_published
+    `),
+  ]);
+
+  const total = (counted.rows[0] as { total: number } | undefined)?.total ?? 0;
+
+  return {
+    items: (rows.rows as SummaryRow[]).map(toSummary),
+    page,
+    perPage,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / perPage)),
+  };
+}
+
 type DetailRow = SummaryRow & {
   address: string;
   phone: string | null;

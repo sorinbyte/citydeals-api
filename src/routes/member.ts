@@ -4,6 +4,7 @@ import { z } from "zod";
 import { env } from "@/lib/env";
 import { allowRequest, clientIp } from "@/lib/rate-limit";
 import { deliverPhoneCode } from "@/lib/sms";
+import { addFavourite, listFavouriteIds, removeFavourite } from "@/services/favourites";
 import {
   destroyMemberSession,
   findMemberBySessionToken,
@@ -16,8 +17,10 @@ import {
 import {
   getRedemptionStatusForSession,
   issueRedemption,
+  listCooldowns,
   voidRedemption,
 } from "@/services/redemptions";
+import { listFavouriteVenues } from "@/services/venues";
 import type { MemberProfile } from "@/types/api";
 
 /*
@@ -56,6 +59,13 @@ const verifyBody = z
   .strict();
 
 const issueBody = z.object({ dealId: z.string().uuid() }).strict();
+
+/* Same shape as routes/venues.ts. perPage is capped here rather than in the service, so one careless
+   caller can't ask for the whole table. */
+const listQuery = z.object({
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  perPage: z.coerce.number().int().min(1).max(50).default(20),
+});
 
 const idParam = z.string().uuid();
 
@@ -222,6 +232,71 @@ export const memberRoute = new Hono<MemberEnv>()
     }
 
     return c.json(result.redemption, 201);
+  })
+
+  /* ----------------------------------------------------------------------------------------- */
+
+  /*
+    The Favorite tab. Newest first — see listFavouriteVenues.
+
+    ⚠️ THIS ROUTE AND /favourites/ids MUST STAY ABOVE /favourites/:venueId. Hono matches in
+    declaration order, so with :venueId first the literal path "ids" is read as a venue id and the
+    whole thing 400s on INVALID_ID. routes/venues.ts carries the same warning for /venues/near
+    sitting above /venues/:slug, and it is just as easy to undo here by tidying the file.
+  */
+  .get("/favourites", requireMember, async (c) => {
+    const parsed = listQuery.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_QUERY", details: parsed.error.flatten() } }, 400);
+    }
+
+    const { page, perPage } = parsed.data;
+    return c.json(await listFavouriteVenues({ memberId: c.get("member").id, page, perPage }));
+  })
+
+  /*
+    Every saved venue id, unpaginated.
+
+    Drives the hearts everywhere else in the app — home rows, search, the map — which need an answer
+    for venues that may be nowhere near page 1 of the member's own list. Same shape and same reason
+    as /cooldowns: one small per-member list the app merges client-side, so the catalogue reads stay
+    public and cacheable.
+  */
+  .get("/favourites/ids", requireMember, async (c) => {
+    return c.json({ items: await listFavouriteIds(c.get("member").id) });
+  })
+
+  /*
+    PUT, not POST, because saving a venue twice is the same as saving it once — and an optimistic
+    heart on bad wifi really does send this twice.
+  */
+  .put("/favourites/:venueId", requireMember, async (c) => {
+    const venueId = idParam.safeParse(c.req.param("venueId"));
+    if (!venueId.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    const saved = await addFavourite(c.get("member").id, venueId.data);
+    if (!saved) return c.json({ error: { code: "VENUE_NOT_FOUND" } }, 404);
+
+    return c.body(null, 204);
+  })
+
+  /* Idempotent too: removing something that was never saved satisfies the caller either way. */
+  .delete("/favourites/:venueId", requireMember, async (c) => {
+    const venueId = idParam.safeParse(c.req.param("venueId"));
+    if (!venueId.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    await removeFavourite(c.get("member").id, venueId.data);
+    return c.body(null, 204);
+  })
+
+  /*
+    Which deals this member can't use yet, and when each frees up.
+
+    Lets a venue screen show a closed padlock and a date instead of an inviting button that leads
+    to a refusal — the app asks once alongside the catalogue and merges by deal id.
+  */
+  .get("/cooldowns", requireMember, async (c) => {
+    return c.json({ items: await listCooldowns(c.get("member").id) });
   })
 
   /*
