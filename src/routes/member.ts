@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { env } from "@/lib/env";
 import { allowRequest, clientIp } from "@/lib/rate-limit";
-import { deliverPhoneCode } from "@/lib/sms";
+import { deliverPhoneCode, maskPhone } from "@/lib/sms";
 import { addFavourite, listFavouriteIds, removeFavourite } from "@/services/favourites";
 import {
   destroyMemberSession,
@@ -156,7 +156,10 @@ export const memberRoute = new Hono<MemberEnv>()
       belt-and-braces against an unhandled rejection taking the process down.
     */
     void deliverPhoneCode(phone, issued.code).catch((error) => {
-      console.error(`verification code for ${phone} was minted but could not be delivered:`, error);
+      console.error(
+        `verification code for ${maskPhone(phone)} was minted but could not be delivered:`,
+        error,
+      );
     });
 
     /*

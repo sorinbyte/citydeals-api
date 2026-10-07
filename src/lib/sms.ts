@@ -20,6 +20,18 @@ import { env, smsEnabled } from "@/lib/env";
 const SEND_URL = "https://app.smso.ro/api/v1/send";
 
 /*
+  How a phone number appears in a log line.
+
+  ⚠️ Never the whole number. Logs get read over shoulders, pasted into chat threads and shipped to
+  whatever aggregator we end up with, and a full +40 number is personal data that identifies a
+  member on its own. The last four digits are enough to match a log line against "I didn't get my
+  code" from a specific person, which is the only thing we ever need them for.
+*/
+export function maskPhone(phone: string): string {
+  return `+40•••${phone.slice(-4)}`;
+}
+
+/*
   ⚠️ MUST STAY UNDER 70 CHARACTERS, and that is not a style rule.
 
   ă î â ș ț are outside the GSM-7 alphabet, so any Romanian text forces the message into UCS-2 —
@@ -76,11 +88,26 @@ export async function deliverPhoneCode(phone: string, code: string): Promise<boo
       signal: AbortSignal.timeout(10_000),
     });
   } catch (error) {
-    console.error(`SMSO request failed for ${phone}:`, error);
+    console.error(`SMSO request failed for ${maskPhone(phone)}:`, error);
     return false;
   }
 
-  if (response.ok) return true;
+  /*
+    ⚠️ Logging the SUCCESS, not just the failures.
+
+    This line exists because of an evening lost to its absence: a member reported no SMS, and from
+    the outside "SMSO accepted it and the carrier swallowed it" looked exactly like "we never called
+    SMSO at all". Only the failures were logged, so silence meant both things at once. A send that
+    worked has to say so, or the logs can only ever tell us half the story.
+  */
+  if (response.ok) {
+    /* Their body carries the message id and the segment count. The id is what SMSO support asks for
+       when they insist they delivered it, and `parts` is how we'd ever notice the diacritics had
+       quietly started costing two segments. Capped because it's a third party's payload. */
+    const body = (await response.text().catch(() => "")).slice(0, 200);
+    console.log(`SMSO accepted the code for ${maskPhone(phone)} — ${body}`);
+    return true;
+  }
 
   /*
     ⚠️ 402 is the one to actually watch for. Out of credit means every sign-up in the product stops
@@ -97,9 +124,11 @@ export async function deliverPhoneCode(phone: string, code: string): Promise<boo
       `⚠️ SMSO CREDIT EXHAUSTED — no member can sign in until it is topped up. ${detail}`,
     );
   } else if (response.status === 409) {
-    console.error(`SMSO rate limit hit (per-minute ceiling) for ${phone}. ${detail}`);
+    console.error(`SMSO rate limit hit (per-minute ceiling) for ${maskPhone(phone)}. ${detail}`);
   } else {
-    console.error(`SMSO refused the send for ${phone}: HTTP ${response.status}. ${detail}`);
+    console.error(
+      `SMSO refused the send for ${maskPhone(phone)}: HTTP ${response.status}. ${detail}`,
+    );
   }
 
   return false;
