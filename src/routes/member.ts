@@ -137,12 +137,27 @@ export const memberRoute = new Hono<MemberEnv>()
     }
 
     const issued = await requestPhoneCode(phone);
-    const delivered = await deliverPhoneCode(phone, issued.code);
-    if (!delivered) {
-      /* Loud, because the caller got a cheerful 204 and this is the only place anyone finds out
-         that a member is sitting there waiting for an SMS that isn't coming. */
-      console.error(`verification code for ${phone} was minted but could not be delivered`);
-    }
+
+    /*
+      ⚠️ NOT awaited, and that is the whole point. The same rule the partner magic link follows.
+
+      Two reasons, and the first is the one a member feels. Handing the message to SMSO takes a
+      round trip to their API, and waiting for it put that time in front of the screen that explains
+      what is happening — so someone tapped "trimite codul" and sat on the phone-number screen while
+      we talked to a third party. Nothing about their experience depends on SMSO's acknowledgement:
+      the code is already minted and stored, and the SMS arrives when the carrier delivers it, which
+      is seconds later regardless.
+
+      The second is that an endpoint whose response time varies with delivery is an endpoint that
+      answers a question about the number. Returning in constant time keeps it mute.
+
+      deliverPhoneCode never throws and logs its own failures loudly — including the one that
+      matters, SMSO being out of credit — so nothing is lost by not waiting here. The .catch is
+      belt-and-braces against an unhandled rejection taking the process down.
+    */
+    void deliverPhoneCode(phone, issued.code).catch((error) => {
+      console.error(`verification code for ${phone} was minted but could not be delivered:`, error);
+    });
 
     /*
       ⚠️ The dev echo. This hands the code straight back to the caller, which in a deployed
