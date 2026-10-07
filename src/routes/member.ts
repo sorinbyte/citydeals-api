@@ -105,20 +105,40 @@ export const memberRoute = new Hono<MemberEnv>()
   /*
     Asks for a code.
 
-    ⚠️ Always 204, whatever happens — even for a number that isn't Romanian, even when delivery
-    fails. An endpoint that answers differently for a real number is one that enumerates our members
-    one guess at a time, and phone numbers are guessable in a way email addresses are not: +407
-    followed by eight digits is a walkable space.
+    ⚠️ 204 whatever the ANSWER about the number is — a number that isn't Romanian, a number we've
+    never seen, a send that failed at the gateway all look identical from outside. An endpoint that
+    answers differently for a real number is one that enumerates our members one guess at a time,
+    and phone numbers are guessable in a way email addresses are not: +407 followed by eight digits
+    is a walkable space.
+
+    ⚠️ The ONE exception is 429, and it's a deliberate narrowing of the rule above. Being over a
+    rate limit is a fact about the CALLER — how many times they just asked — not about whether the
+    number they typed belongs to a member, so it reveals nothing the silence was protecting. It used
+    to return 204 like everything else, and that cost an evening: the app happily walked on to the
+    code screen and sat there waiting for an SMS the server had already decided not to send, with
+    nothing on either side saying so. A state the member can actually fix has to be visible.
 
     (PHONE_INVALID exists in the error union for the app's own client-side hint, not for this route
     to return.)
+
+    ⚠️ Every exit logs. Same lesson as the success line in lib/sms.ts: with only the failures
+    logged, "we never got the request" and "we got it and dropped it on purpose" are the same
+    silence, and you cannot tell them apart from the outside at two in the morning.
   */
   .post("/auth/request-code", async (c) => {
     const parsed = requestCodeBody.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.body(null, 204);
+    /* No number to name in the log — a body this route can't read is a broken client or a probe,
+       and either way there's nothing a member is waiting on. */
+    if (!parsed.success) {
+      console.warn("[request-code] unreadable body — nothing minted, nothing sent");
+      return c.body(null, 204);
+    }
 
     const phone = normalisePhone(parsed.data.phone);
-    if (!phone) return c.body(null, 204);
+    if (!phone) {
+      console.warn("[request-code] not a Romanian mobile number — nothing minted, nothing sent");
+      return c.body(null, 204);
+    }
 
     /*
       Limits BEFORE anything else, and the per-phone one is the limit that matters — an attacker
@@ -127,15 +147,23 @@ export const memberRoute = new Hono<MemberEnv>()
 
       Three per fifteen minutes is also a cost decision: once SMS is real, every one of these is
       money, and a resend button with no ceiling is a bill someone else writes.
+
+      ⚠️ The window is in memory, so a deploy wipes it — see lib/rate-limit.ts. Worth remembering
+      before concluding from a quiet log that nobody hit the ceiling.
     */
     if (!allowRequest(`member-code:phone:${phone}`, 3, 15 * 60_000)) {
-      return c.body(null, 204);
+      console.warn(`[request-code] ${maskPhone(phone)} is over 3 per 15 minutes — nothing sent`);
+      return c.json({ error: { code: "TOO_MANY_REQUESTS" } }, 429);
     }
     const ip = clientIp(c.req.header("X-Forwarded-For"));
     if (ip && !allowRequest(`member-code:ip:${ip}`, 10, 15 * 60_000)) {
-      return c.body(null, 204);
+      /* Unmasked, unlike the phone: this line only ever appears for someone hammering the endpoint,
+         and the address is the only handle we'd have on them. */
+      console.warn(`[request-code] ${ip} is over 10 per 15 minutes — nothing sent`);
+      return c.json({ error: { code: "TOO_MANY_REQUESTS" } }, 429);
     }
 
+    console.log(`[request-code] minting a code for ${maskPhone(phone)}`);
     const issued = await requestPhoneCode(phone);
 
     /*
