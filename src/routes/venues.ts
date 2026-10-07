@@ -22,7 +22,7 @@ const listQuery = z.object({
     is INVALID_QUERY rather than a silent fallback, so a client typo is loud instead of confusing.
     "nearby" isn't here: distance needs coordinates, so that's /venues/near.
   */
-  sort: z.enum(["rating", "az", "za"]).default("rating"),
+  sort: z.enum(["rating", "az", "za", "trending"]).default("rating"),
   /*
     Free-text search over name and tags. Trimmed here so " " isn't a search for a space, and
     capped so nobody makes us ILIKE a novel across the table. A whitespace-only q fails min(1)

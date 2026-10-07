@@ -24,7 +24,7 @@ export type DealType = "one_plus_one" | "free_item" | "percentage";
   a sort mode here. Alphabetical uses Romanian collation server-side, which is not the same answer
   a byte-order sort gives — see the ordering map in services/venues.ts.
 */
-export type VenueSort = "rating" | "az" | "za";
+export type VenueSort = "rating" | "az" | "za" | "trending";
 
 export type Deal = {
   id: string;

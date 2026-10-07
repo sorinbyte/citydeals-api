@@ -75,6 +75,30 @@ const ORDER_BY: Record<VenueSort, SQL> = {
   rating: sql`v.rating DESC NULLS LAST, v.name ${RO_COLLATE}, v.id`,
   az: sql`v.name ${RO_COLLATE} ASC, v.id`,
   za: sql`v.name ${RO_COLLATE} DESC, v.id`,
+  /*
+    What people actually used lately, for the home "Trending" row.
+
+    ⚠️ CONSUMED redemptions only. A code that was issued and never scanned says a member meant to go,
+    which is not the same claim — and issuing is the half an attacker controls, so ranking on it
+    would let anyone push their own venue up the row by tapping a stub repeatedly.
+
+    ⚠️ Thirty days, and the window is the whole point. An all-time count is a popularity ranking
+    that ossifies: the venues that did well in month one stay on the home screen forever and a new
+    partner can never surface. Short enough to move, long enough that a quiet week doesn't erase a
+    good venue.
+
+    Ties break on rating, so with no redemptions yet this row reads as the top-rated order — which
+    is the honest answer to "what's trending" before anyone has redeemed anything, not a bug.
+
+    ⚠️ A correlated subquery per row. Fine over tens of venues; the moment this list is thousands it
+    wants a materialised count refreshed on a schedule rather than a scan per row. The index that
+    makes it survivable until then is (venue_id, consumed_at).
+  */
+  trending: sql`
+    (SELECT count(*) FROM redemptions r
+      WHERE r.venue_id = v.id
+        AND r.consumed_at >= now() - interval '30 days') DESC,
+    v.rating DESC NULLS LAST, v.id`,
 };
 
 /*
