@@ -253,6 +253,16 @@ export const members = pgTable(
     phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }).notNull(),
     // optional — we ask, they can skip, and a support email works fine off the phone number
     name: text("name"),
+    /*
+      Also optional, and asked for in the same breath as the name right after verification.
+
+      ⚠️ NOT unique and NOT an identity. The phone number is who you are here — it's what was
+      verified, it's what the session is minted against, and it's the only thing with a uniqueness
+      constraint. An email is a way to reach someone about a receipt or a problem, nothing more. A
+      unique index here would turn a typo'd address into a sign-in someone else can't complete, and
+      two family members sharing an inbox into a support ticket.
+    */
+    email: text("email"),
 
     /*
       The trial. Ours, not a payment provider's, which is why it can live here while subscriptions

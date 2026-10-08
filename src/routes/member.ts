@@ -12,6 +12,7 @@ import {
   requestPhoneCode,
   startTrial,
   touchMemberSeen,
+  updateMemberProfile,
   verifyPhoneCode,
 } from "@/services/member-auth";
 import {
@@ -59,6 +60,25 @@ const verifyBody = z
   .strict();
 
 const issueBody = z.object({ dealId: z.string().uuid() }).strict();
+
+/*
+  The optional half of a member: what they're called and where to reach them.
+
+  ⚠️ Both fields are three-state and the distinction is load-bearing. Absent means "don't touch
+  this", null means "clear it", a string means "set it" — so a form that only edits the name can't
+  silently wipe an email. An empty string is normalised to null before validation, because a member
+  who selects the text and deletes it means to clear the field, not to store "".
+*/
+const emptyToNull = (v: unknown) => (typeof v === "string" && v.trim() === "" ? null : v);
+
+const profileBody = z
+  .object({
+    name: z.preprocess(emptyToNull, z.string().trim().max(80).nullable().optional()),
+    /* Stored as typed rather than lowercased: it is a way to reach someone, never a key we look
+       anything up by, so there is nothing to normalise for. */
+    email: z.preprocess(emptyToNull, z.string().trim().email().max(254).nullable().optional()),
+  })
+  .strict();
 
 /* Same shape as routes/venues.ts. perPage is capped here rather than in the service, so one careless
    caller can't ask for the whole table. */
@@ -227,10 +247,35 @@ export const memberRoute = new Hono<MemberEnv>()
       token: result.token,
       expiresAt: result.expiresAt.toISOString(),
       member: result.member,
+      /* Whether this call created the member. The app asks for a name and an email only on the way
+         in — see the note on MemberSession in types/api.ts for why it isn't inferred from the
+         profile being empty. */
+      isNew: result.isNew,
     });
   })
 
   .get("/me", requireMember, (c) => c.json(c.get("member")))
+
+  /*
+    Name and email. Set from the step after verification, and editable later from Profile.
+
+    ⚠️ PATCH, not PUT: the app sends only the fields it is actually changing, and the service leaves
+    anything absent alone. Nothing here can touch the phone — that is the verified identity, and a
+    profile form has no business moving it.
+  */
+  .patch("/me", requireMember, async (c) => {
+    const parsed = profileBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_BODY", details: parsed.error.flatten() } }, 400);
+    }
+
+    const updated = await updateMemberProfile(c.get("member").id, parsed.data);
+    /* The session proved this member exists moments ago, so this is a deleted-mid-request race
+       rather than a normal path — but returning the old profile would be a lie. */
+    if (!updated) return c.json({ error: { code: "NOT_FOUND" } }, 404);
+
+    return c.json(updated);
+  })
 
   .delete("/session", requireMember, async (c) => {
     await destroyMemberSession(c.get("sessionToken"));

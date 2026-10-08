@@ -519,6 +519,8 @@ export type MemberProfile = {
   id: string;
   phone: string;
   name: string | null;
+  /* Optional, and never an identity — see the column comment in db/schema/identity.ts. */
+  email: string | null;
   /* Decided server-side against server time, same rule as isOpen. The app never compares dates. */
   trialState: MemberTrialState;
   trialEndsAt: string | null;
@@ -528,6 +530,15 @@ export type MemberSession = {
   token: string;
   expiresAt: string;
   member: MemberProfile;
+  /*
+    True only when this verification CREATED the member, rather than signing an existing one back in.
+
+    ⚠️ The app uses it to decide whether to ask for a name and an email after the code, and it has to
+    be this rather than "are name and email empty". Both are optional — somebody who deliberately
+    skipped them would otherwise be asked again on every single sign-in, which is how an optional
+    step turns into a nag.
+  */
+  isNew: boolean;
 };
 
 /*

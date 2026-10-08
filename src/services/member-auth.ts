@@ -147,7 +147,9 @@ export async function requestPhoneCode(phone: string): Promise<IssuedCode> {
 export type VerifyFailure = "CODE_INVALID" | "CODE_EXPIRED" | "TOO_MANY_ATTEMPTS";
 
 export type VerifyResult =
-  | { ok: true; token: string; expiresAt: Date; member: MemberProfile }
+  /* `isNew` is true only when this call CREATED the member — see the note on MemberSession in
+     types/api.ts for why the app can't just check whether the profile is empty. */
+  | { ok: true; token: string; expiresAt: Date; member: MemberProfile; isNew: boolean }
   | { ok: false; reason: VerifyFailure };
 
 /*
@@ -219,7 +221,11 @@ export async function verifyPhoneCode(phone: string, code: string): Promise<Veri
       VALUES (${phone}, now(), now())
       ON CONFLICT (phone) DO UPDATE
         SET last_seen_at = now(), updated_at = now()
-      RETURNING id, phone, name,
+      RETURNING id, phone, name, email,
+                /* Postgres sets xmax to 0 on a freshly inserted row and to the locking transaction
+                   id on one that an ON CONFLICT update touched. It is the only way to tell an
+                   insert from an update out of a single upsert without a second round trip. */
+                (xmax = 0) AS is_new,
                 CASE
                   WHEN trial_ends_at IS NULL THEN 'none'
                   WHEN trial_ends_at > now() THEN 'active'
@@ -228,7 +234,7 @@ export async function verifyPhoneCode(phone: string, code: string): Promise<Veri
                 to_json(trial_ends_at)#>>'{}' AS trial_ends_at
     `);
 
-    const memberRow = upserted.rows[0] as MemberRow | undefined;
+    const memberRow = upserted.rows[0] as (MemberRow & { is_new: boolean }) | undefined;
     if (!memberRow) throw new Error("failed to upsert member");
 
     const token = generateToken();
@@ -247,6 +253,7 @@ export async function verifyPhoneCode(phone: string, code: string): Promise<Veri
       token,
       expiresAt: toDate(sessionRow.expires_at),
       member: toProfile(memberRow),
+      isNew: memberRow.is_new,
     } as const;
   });
 }
@@ -255,6 +262,7 @@ type MemberRow = {
   id: string;
   phone: string;
   name: string | null;
+  email: string | null;
   trial_state: MemberProfile["trialState"];
   trial_ends_at: string | null;
 };
@@ -264,6 +272,7 @@ function toProfile(row: MemberRow): MemberProfile {
     id: row.id,
     phone: row.phone,
     name: row.name,
+    email: row.email,
     trialState: row.trial_state,
     trialEndsAt: row.trial_ends_at,
   };
@@ -272,7 +281,7 @@ function toProfile(row: MemberRow): MemberProfile {
 /* The projection every member-authenticated request needs. Trial state is decided in SQL against
    server time, so the app never compares a date and can never disagree with us about eligibility. */
 const profileColumns = sql`
-  m.id, m.phone, m.name,
+  m.id, m.phone, m.name, m.email,
   CASE
     WHEN m.trial_ends_at IS NULL THEN 'none'
     WHEN m.trial_ends_at > now() THEN 'active'
@@ -352,6 +361,34 @@ export async function startTrial(memberId: string): Promise<MemberProfile | null
 
   const result = await db.execute(sql`
     SELECT ${profileColumns} FROM members m WHERE m.id = ${memberId} LIMIT 1
+  `);
+
+  const row = result.rows[0] as MemberRow | undefined;
+  return row ? toProfile(row) : null;
+}
+
+/*
+  Name and email, set from the step after verification or edited later from Profile.
+
+  ⚠️ Both are optional and both are clearable. `undefined` means "leave it alone", `null` means
+  "remove it" — which is why the SQL uses COALESCE against a sentinel rather than taking the value
+  straight: a plain COALESCE(${name}, name) can never clear a field, and a plain assignment can never
+  leave one alone. The route decides which of the two a request meant; this just does it.
+
+  Never touches the phone. That is the identity, it was verified, and nothing on a profile form gets
+  to move it.
+*/
+export async function updateMemberProfile(
+  memberId: string,
+  patch: { name?: string | null; email?: string | null },
+): Promise<MemberProfile | null> {
+  const result = await db.execute(sql`
+    UPDATE members m SET
+      name  = ${patch.name === undefined ? sql`m.name` : patch.name},
+      email = ${patch.email === undefined ? sql`m.email` : patch.email},
+      updated_at = now()
+    WHERE m.id = ${memberId}
+    RETURNING ${profileColumns}
   `);
 
   const row = result.rows[0] as MemberRow | undefined;
