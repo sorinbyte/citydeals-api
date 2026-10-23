@@ -119,6 +119,33 @@ export function inviteEmail(link: string, companyName: string, expiresAt: Date):
 }
 
 /*
+  "Confirm you want to hear when we launch" — the double opt-in for the marketing site's waitlist.
+  Only a click on this link makes the address a subscriber; ignoring it is a no.
+*/
+export function waitlistConfirmEmail(link: string): Message {
+  return {
+    subject: "Confirmă adresa ca să afli când lansăm",
+    html: layout(
+      "Mai e un pas",
+      `<p style="margin:0;font-size:15px;line-height:1.6;">Ai cerut să afli când lansăm aplicația. Confirmă adresa și îți trimitem un email în ziua lansării.</p>
+       <p style="margin:12px 0 0;font-size:15px;line-height:1.6;">Dacă nu ai cerut tu asta, ignoră mesajul — fără confirmare nu primești nimic de la noi.</p>`,
+      link,
+      "Confirmă adresa",
+    ),
+    text: [
+      "Mai e un pas",
+      "",
+      "Ai cerut să afli când lansăm aplicația. Confirmă adresa deschizând linkul de mai jos și îți",
+      "trimitem un email în ziua lansării.",
+      "",
+      link,
+      "",
+      "Dacă nu ai cerut tu asta, ignoră mesajul — fără confirmare nu primești nimic de la noi.",
+    ].join("\n"),
+  };
+}
+
+/*
   Sends, and reports whether it worked. Never throws.
 
   ⚠️ Callers in the auth flow MUST NOT turn a false into a different HTTP response. request-link

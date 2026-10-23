@@ -35,6 +35,7 @@ import {
   updateDeal,
   updateVenueForAdmin,
 } from "@/services/venues";
+import { listWaitlist } from "@/services/waitlist";
 
 /*
   The admin dashboard's own surface. Everything here is mounted under /v1/admin and none of it is
@@ -944,6 +945,9 @@ export const adminRoute = new Hono<AdminEnv>()
   })
 
   .get("/partner-leads", async (c) => c.json({ items: await listLeads() }))
+  /* The marketing site's "anunță-mă" list — everyone who signed up, confirmed or not, and the two
+     totals. Read-only: an address leaves the list by asking, and that's a manual delete for now. */
+  .get("/waitlist", async (c) => c.json(await listWaitlist()))
 
   .patch("/partner-leads/:id", async (c) => {
     const id = idParam.safeParse(c.req.param("id"));

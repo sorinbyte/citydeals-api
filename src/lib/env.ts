@@ -126,6 +126,17 @@ const schema = z.object({
   PARTNER_BASE_URL: z.string().url(),
 
   /*
+    The marketing site's origin, for the one link the API puts in front of the public: the waitlist
+    confirmation email lands on <MARKETING_BASE_URL>/confirmare-email?token=…  Env for the same
+    reason as PARTNER_BASE_URL — the domain isn't hardcoded anywhere.
+
+    Optional, unlike PARTNER_BASE_URL, so adding it can't take a running deploy down at boot. While
+    it's unset, POST /v1/waitlist answers 503 WAITLIST_UNCONFIGURED — loud, and nobody's address is
+    stored with no way to confirm it.
+  */
+  MARKETING_BASE_URL: z.string().url().optional(),
+
+  /*
     Resend. The only mail path there is.
 
     Required rather than optional-with-a-fallback on purpose. The optional shape means a missing key

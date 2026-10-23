@@ -11,6 +11,7 @@ import { memberRoute } from "@/routes/member";
 import { partnerRoute } from "@/routes/partner";
 import { redeemRoute } from "@/routes/redeem";
 import { venuesRoute } from "@/routes/venues";
+import { waitlistRoute } from "@/routes/waitlist";
 
 const app = new Hono();
 
@@ -22,7 +23,8 @@ app.use("*", logger());
   Only browsers enforce CORS, so this governs exactly one thing: whether another website's
   JavaScript can read our responses on a visitor's behalf. The mobile app, both dashboards'
   server-side proxies and curl all send no Origin and are unaffected — which is why this list stays
-  short. Today the entire cross-origin surface is POST /v1/partner-leads from the marketing site.
+  short. Today the entire cross-origin surface is POST /v1/partner-leads and POST /v1/waitlist (+ its
+  /confirm) from the marketing site.
 
   ⚠️ This is NOT what protects /v1/admin — that's the shared secret plus the Access token in
   routes/admin.ts. Don't let a tightened CORS config read as "the admin routes are covered".
@@ -101,9 +103,12 @@ app.get("/", (c) =>
       "POST /v1/redeem/:token/confirm",
       "POST /v1/redeem/by-code (device cookie)",
       "DELETE /v1/redeem/device",
+      "POST /v1/waitlist",
+      "POST /v1/waitlist/confirm",
       "GET|POST /v1/admin/partners (admin secret)",
       "GET /v1/admin/partner-leads (admin secret)",
       "PATCH /v1/admin/partner-leads/:id (admin secret)",
+      "GET /v1/admin/waitlist (admin secret)",
     ],
   }),
 );
@@ -160,6 +165,8 @@ v1.route("/member", memberRoute);
   change to the CORS allowlist above.
 */
 v1.route("/redeem", redeemRoute);
+/* The marketing site's launch list. Public — see routes/waitlist.ts. */
+v1.route("/waitlist", waitlistRoute);
 
 app.route("/v1", v1);
 

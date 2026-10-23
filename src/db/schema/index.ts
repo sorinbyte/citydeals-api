@@ -6,3 +6,4 @@ export * from "@/db/schema/identity";
 export * from "@/db/schema/menu";
 export * from "@/db/schema/partners";
 export * from "@/db/schema/redemptions";
+export * from "@/db/schema/waitlist";
