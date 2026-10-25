@@ -162,6 +162,17 @@ export type VenueDetail = VenueSummary & {
 export type VenueNearby = VenueSummary & {
   distanceMetres: number;
   location: { lat: number; lng: number };
+  /*
+    Two facts for the map's Filtre sheet, nearby-only for the same reason as `location`. The map
+    holds every pin at once and hides the ones a filter rules out — a round trip per chip tap would
+    make the pins flicker. Lists don't need them: they ask the server (`?subcategory=`).
+
+    The client only hides pins on these. It never decides anything with them.
+  */
+  // every subcategory the venue is tagged with — a place can be both 'italian' and 'pizza'
+  subcategoryKeys: string[];
+  // the distinct party sizes its live offers are for: [2] is 1+1-only, [1, 2] has both kinds
+  dealPeople: number[];
 };
 
 export type Paginated<T> = {

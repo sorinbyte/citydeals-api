@@ -437,7 +437,14 @@ export async function findNearby(
            -- same projection the detail query needs: geography reads back as EWKB hex, so the
            -- coordinates have to be pulled out explicitly rather than selected as a column
            ST_Y(v.location::geometry) AS lat,
-           ST_X(v.location::geometry) AS lng
+           ST_X(v.location::geometry) AS lng,
+           -- for the map's filters (see VenueNearby)
+           COALESCE((SELECT json_agg(vs.subcategory_key ORDER BY vs.subcategory_key)
+                     FROM venue_subcategories vs WHERE vs.venue_id = v.id), '[]'::json)
+             AS subcategory_keys,
+           COALESCE((SELECT json_agg(DISTINCT d.people)
+                     FROM deals d WHERE d.venue_id = v.id AND d.is_active), '[]'::json)
+             AS deal_people
     FROM venues v, ${localNow}
     WHERE v.is_published
       AND ST_DWithin(v.location, ${point}, ${radiusMetres})
@@ -445,13 +452,21 @@ export async function findNearby(
     LIMIT ${limit}
   `);
 
-  type NearbyRow = SummaryRow & { distance_metres: number; lat: number; lng: number };
+  type NearbyRow = SummaryRow & {
+    distance_metres: number;
+    lat: number;
+    lng: number;
+    subcategory_keys: string[];
+    deal_people: number[];
+  };
 
   return (result.rows as NearbyRow[]).map((row) => ({
     ...toSummary(row),
     distanceMetres: row.distance_metres,
     // for a pin and a "take me there" deep link — never for measuring anything on the device
     location: { lat: row.lat, lng: row.lng },
+    subcategoryKeys: row.subcategory_keys,
+    dealPeople: row.deal_people,
   }));
 }
 
