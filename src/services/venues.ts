@@ -116,6 +116,7 @@ type SummaryRow = {
   rating: number | null;
   rating_count: number;
   tags: string[];
+  display_tags: string[];
   is_new: boolean;
   is_open: boolean;
   opens_at: string | null;
@@ -133,6 +134,16 @@ const summaryColumns = sql`
   v.rating::float8            AS rating,
   v.rating_count,
   v.tags,
+  -- What the public sees in the "Italian, Pizza" slot. Tags are the venue's own free text and only
+  -- some venues have any (admin-created ones usually don't); a venue with none is described by the
+  -- subcategories it's filed under instead, so the line is never blank. Decided here so every
+  -- client agrees. Admin reads raw v.tags — see toAdminVenue.
+  CASE WHEN cardinality(v.tags) > 0 THEN v.tags
+       ELSE COALESCE((SELECT array_agg(s.label_ro ORDER BY s.sort_order)
+                      FROM venue_subcategories vs
+                      JOIN subcategories s ON s.key = vs.subcategory_key
+                      WHERE vs.venue_id = v.id), '{}')
+  END AS display_tags,
   v.is_new,
   ${isOpenNow}                AS is_open,
   ${nextOpeningAt}            AS opens_at,
@@ -162,7 +173,7 @@ function toSummary(row: SummaryRow): VenueSummary {
     area: row.area,
     rating: row.rating,
     ratingCount: row.rating_count,
-    tags: row.tags,
+    tags: row.display_tags,
     isNew: row.is_new,
     isOpen: row.is_open,
     // only meaningful while closed — sending a next-opening time for an open venue invites a
@@ -568,6 +579,9 @@ function toAdminVenue(row: AdminVenueRow): AdminVenue {
 
   return {
     ...detail,
+    /* The real column, not the public fallback. The edit form shows what was actually typed —
+       handing it the subcategory labels would turn them into tags the first time someone saves. */
+    tags: row.tags,
     /*
       Overwrites the `deals` toDetail just built. That aggregate ran, filtered to active, and is
       thrown away — a few microseconds on a single-row admin query, and the price of detailColumns
