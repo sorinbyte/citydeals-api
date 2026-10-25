@@ -116,7 +116,6 @@ type SummaryRow = {
   rating: number | null;
   rating_count: number;
   tags: string[];
-  display_tags: string[];
   is_new: boolean;
   is_open: boolean;
   opens_at: string | null;
@@ -134,16 +133,6 @@ const summaryColumns = sql`
   v.rating::float8            AS rating,
   v.rating_count,
   v.tags,
-  -- What the public sees in the "Italian, Pizza" slot. Tags are the venue's own free text and only
-  -- some venues have any (admin-created ones usually don't); a venue with none is described by the
-  -- subcategories it's filed under instead, so the line is never blank. Decided here so every
-  -- client agrees. Admin reads raw v.tags — see toAdminVenue.
-  CASE WHEN cardinality(v.tags) > 0 THEN v.tags
-       ELSE COALESCE((SELECT array_agg(s.label_ro ORDER BY s.sort_order)
-                      FROM venue_subcategories vs
-                      JOIN subcategories s ON s.key = vs.subcategory_key
-                      WHERE vs.venue_id = v.id), '{}')
-  END AS display_tags,
   v.is_new,
   ${isOpenNow}                AS is_open,
   ${nextOpeningAt}            AS opens_at,
@@ -173,7 +162,7 @@ function toSummary(row: SummaryRow): VenueSummary {
     area: row.area,
     rating: row.rating,
     ratingCount: row.rating_count,
-    tags: row.display_tags,
+    tags: row.tags,
     isNew: row.is_new,
     isOpen: row.is_open,
     // only meaningful while closed — sending a next-opening time for an open venue invites a
@@ -579,9 +568,6 @@ function toAdminVenue(row: AdminVenueRow): AdminVenue {
 
   return {
     ...detail,
-    /* The real column, not the public fallback. The edit form shows what was actually typed —
-       handing it the subcategory labels would turn them into tags the first time someone saves. */
-    tags: row.tags,
     /*
       Overwrites the `deals` toDetail just built. That aggregate ran, filtered to active, and is
       thrown away — a few microseconds on a single-row admin query, and the price of detailColumns
@@ -762,6 +748,8 @@ export type UpdateVenueInput = {
   isPublished: boolean;
   /* Replaces the whole set — whatever isn't in here stops applying to this venue. */
   subcategoryKeys: string[];
+  /* Replaces the list when given; undefined leaves the stored tags as they are. */
+  tags?: string[];
 };
 
 export type CreateVenueInput = UpdateVenueInput & {
@@ -785,7 +773,7 @@ export type CreateVenueResult =
   A new venue, with its subcategories, in one transaction.
 
   Everything that isn't passed uses the column default — `rating` stays null, `rating_count` 0,
-  `tags` empty, `is_new` false, `menu_kind` null. Those are earned later (or set by an editor), not
+  `is_new` false, `menu_kind` null. Those are earned later (or set by an editor), not
   invented at creation.
 
   ⚠️ is_published is written explicitly rather than left to the column, because the column defaults
@@ -794,16 +782,18 @@ export type CreateVenueResult =
 */
 export async function createVenueForAdmin(input: CreateVenueInput): Promise<CreateVenueResult> {
   const subcategoryKeys = [...new Set(input.subcategoryKeys)];
+  const tags = input.tags && [...new Set(input.tags)];
 
   let venueId: string | undefined;
 
   try {
     const failure = await db.transaction(async (tx) => {
       const inserted = await tx.execute(sql`
-        INSERT INTO venues (slug, name, partner_id, category_key, area, address, phone,
+        INSERT INTO venues (slug, name, partner_id, category_key, area, address, phone, tags,
                             location, is_published)
         VALUES (${input.slug}, ${input.name}, ${input.partnerId}, ${input.categoryKey},
                 ${input.area}, ${input.address}, ${input.phone},
+                ${sql.param(tags ?? [])}::text[],
                 -- ⚠️ ST_MakePoint takes (x, y) = (LONGITUDE, latitude). Backwards is a venue in the
                 -- wrong hemisphere that still passes every range check.
                 ST_MakePoint(${input.lng}, ${input.lat})::geography,
@@ -883,6 +873,7 @@ export async function updateVenueForAdmin(
   /* Deduped before the count check below, otherwise ["pizza","pizza"] inserts one row, fails the
      comparison and gets reported as an invalid key — which it isn't. */
   const subcategoryKeys = [...new Set(input.subcategoryKeys)];
+  const tags = input.tags && [...new Set(input.tags)];
 
   try {
     const missing = await db.transaction(async (tx) => {
@@ -895,6 +886,8 @@ export async function updateVenueForAdmin(
             address      = ${input.address},
             phone        = ${input.phone},
             is_published = ${input.isPublished},
+            -- null (no tags sent) keeps what's there; see the note on venueBody.tags
+            tags         = COALESCE(${tags === undefined ? null : sql.param(tags)}::text[], tags),
             updated_at   = now()
         WHERE id = ${id}
         RETURNING id

@@ -176,6 +176,14 @@ const venueBody = z.object({
     updateVenueForAdmin.
   */
   subcategoryKeys: z.array(z.string().trim().min(1).max(64)).max(20),
+  /*
+    The free-text descriptors under the venue's name in the app ("Italian, Bistro"). Not the same
+    thing as subcategories: nothing filters on these, they're how the venue reads at a glance.
+
+    Optional, and absent means "leave them alone" on an edit — so an admin build from before this
+    field existed can still save a venue without wiping its tags. Replaces the whole list when sent.
+  */
+  tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
 });
 
 /*
