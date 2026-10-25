@@ -4,11 +4,12 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
 import { pool } from "@/db/client";
-import { corsAllowedOrigins, env } from "@/lib/env";
+import { corsAllowedOrigins, env, leadNotifyEmails } from "@/lib/env";
 import { adminRoute } from "@/routes/admin";
 import { categoriesRoute } from "@/routes/categories";
 import { memberRoute } from "@/routes/member";
 import { partnerRoute } from "@/routes/partner";
+import { partnerLeadsRoute } from "@/routes/partner-leads";
 import { redeemRoute } from "@/routes/redeem";
 import { venuesRoute } from "@/routes/venues";
 import { waitlistRoute } from "@/routes/waitlist";
@@ -103,6 +104,7 @@ app.get("/", (c) =>
       "POST /v1/redeem/:token/confirm",
       "POST /v1/redeem/by-code (device cookie)",
       "DELETE /v1/redeem/device",
+      "POST /v1/partner-leads",
       "POST /v1/waitlist",
       "POST /v1/waitlist/confirm",
       "GET|POST /v1/admin/partners (admin secret)",
@@ -167,6 +169,8 @@ v1.route("/member", memberRoute);
 v1.route("/redeem", redeemRoute);
 /* The marketing site's launch list. Public — see routes/waitlist.ts. */
 v1.route("/waitlist", waitlistRoute);
+/* The /parteneri contact form. Public too — see routes/partner-leads.ts. */
+v1.route("/partner-leads", partnerLeadsRoute);
 
 app.route("/v1", v1);
 
@@ -192,6 +196,12 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
     corsAllowedOrigins.size > 0
       ? `cors: allowing ${[...corsAllowedOrigins].join(", ")}`
       : "cors: no browser origins allowed (CORS_ALLOWED_ORIGINS unset — the partner lead form will fail)",
+  );
+  // same idea: a lead nobody gets mailed about is only noticed by opening admin
+  console.log(
+    leadNotifyEmails.length > 0
+      ? `leads: mailing ${leadNotifyEmails.join(", ")}`
+      : "leads: LEAD_NOTIFY_EMAILS unset — partner leads are saved but nobody is mailed",
   );
 
   /*

@@ -2,9 +2,9 @@
   Placeholder partner leads — people who filled in the form on /parteneri.
 
   All invented, every email on a `.invalid` domain (RFC 2606). That domain is not decoration: it's
-  how the seed tells its own leads apart from real ones. `POST /partner-leads` doesn't exist yet so
-  there are no real leads to confuse them with today, but it's next on the list, and a seed that
-  wipes genuine inbound leads because it couldn't tell them apart is a bad afternoon.
+  how the seed tells its own leads apart from real ones. Real leads arrive through
+  `POST /v1/partner-leads` now, and a seed that wipes genuine inbound leads because it couldn't tell
+  them apart is a bad afternoon.
 
   Covers all four statuses, because the Lead-uri tab filters on them and a fixture set that's all
   `new` proves nothing about the screen.

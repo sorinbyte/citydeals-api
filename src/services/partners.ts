@@ -372,6 +372,27 @@ const leadColumns = sql`
   ${isoTimestamp(sql`l.created_at`)} AS created_at
 `;
 
+export type NewLead = {
+  venueName: string;
+  contactName: string;
+  category: string;
+  phone: string;
+  email: string;
+  message: string | null;
+};
+
+/* From the public /parteneri form. Status is the column default ("new"), notes stay empty — those
+   are ours to fill in from admin. Aliased as l so the shared projection works on RETURNING. */
+export async function createLead(lead: NewLead): Promise<PartnerLead> {
+  const result = await db.execute(sql`
+    INSERT INTO partner_leads AS l (venue_name, contact_name, category, phone, email, message)
+    VALUES (${lead.venueName}, ${lead.contactName}, ${lead.category}, ${lead.phone}, ${lead.email}, ${lead.message})
+    RETURNING ${leadColumns}
+  `);
+
+  return toLead(result.rows[0] as LeadRow);
+}
+
 /* Newest first — the question this list answers is "who just got in touch". */
 export async function listLeads(): Promise<PartnerLead[]> {
   const result = await db.execute(sql`

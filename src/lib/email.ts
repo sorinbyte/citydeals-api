@@ -146,6 +146,61 @@ export function waitlistConfirmEmail(link: string): Message {
 }
 
 /*
+  The internal "someone filled in /parteneri" note, to us — not to the lead. Reply-To is set to the
+  lead's address at the call site, so hitting Reply writes straight to them.
+
+  No button: there's nothing to click through to that admin doesn't already have, and layout()
+  insists on a link. Everything in the table is what a stranger typed, so all of it is escaped.
+*/
+export function partnerLeadEmail(lead: {
+  venueName: string;
+  contactName: string;
+  category: string;
+  phone: string;
+  email: string;
+  message: string | null;
+  createdAt: string;
+}): Message {
+  const rows: Array<[string, string]> = [
+    ["Local", lead.venueName],
+    ["Persoană de contact", lead.contactName],
+    ["Categorie", lead.category],
+    ["Telefon", lead.phone],
+    ["Email", lead.email],
+    ["Mesaj", lead.message ?? "—"],
+    ["Trimis", formatBucharest(new Date(lead.createdAt))],
+  ];
+
+  const table = rows
+    .map(
+      ([label, value]) =>
+        `<tr><td style="padding:6px 16px 6px 0;vertical-align:top;font-size:13px;color:#78716c;white-space:nowrap;">${escapeHtml(label)}</td><td style="padding:6px 0;font-size:15px;line-height:1.5;white-space:pre-wrap;">${escapeHtml(value)}</td></tr>`,
+    )
+    .join("");
+
+  return {
+    subject: `Lead nou: ${lead.venueName}`,
+    html: `<!doctype html>
+<html lang="ro">
+<body style="margin:0;padding:24px;background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1c1917;">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+    <h1 style="margin:0 0 16px;font-size:20px;font-weight:600;">Un local vrea să devină partener</h1>
+    <table style="border-collapse:collapse;">${table}</table>
+    <p style="margin:24px 0 0;font-size:13px;line-height:1.5;color:#78716c;">Răspunsul la acest email ajunge direct la persoana de contact. Lead-ul e salvat și în admin.</p>
+  </div>
+</body>
+</html>`,
+    text: [
+      "Un local vrea să devină partener",
+      "",
+      ...rows.map(([label, value]) => `${label}: ${value}`),
+      "",
+      "Răspunsul la acest email ajunge direct la persoana de contact. Lead-ul e salvat și în admin.",
+    ].join("\n"),
+  };
+}
+
+/*
   Sends, and reports whether it worked. Never throws.
 
   ⚠️ Callers in the auth flow MUST NOT turn a false into a different HTTP response. request-link
@@ -153,27 +208,33 @@ export function waitlistConfirmEmail(link: string): Message {
   the account-enumeration oracle that the 204 exists to prevent. Log it here, loudly, and let the
   route stay boring.
 */
-export async function sendEmail(to: string, message: Message): Promise<boolean> {
+export async function sendEmail(
+  to: string | string[],
+  message: Message,
+  options: { replyTo?: string } = {},
+): Promise<boolean> {
+  const recipients = Array.isArray(to) ? to.join(", ") : to;
   try {
     const { data, error } = await resend.emails.send({
       from: env.EMAIL_FROM,
       to,
+      replyTo: options.replyTo,
       subject: message.subject,
       html: message.html,
       text: message.text,
     });
 
     if (error) {
-      console.error(`email to ${to} rejected by Resend:`, error.name, error.message);
+      console.error(`email to ${recipients} rejected by Resend:`, error.name, error.message);
       return false;
     }
 
-    console.log(`email sent to ${to} (${data?.id ?? "no id"})`);
+    console.log(`email sent to ${recipients} (${data?.id ?? "no id"})`);
     return true;
   } catch (cause) {
     /* Network blip, DNS, Resend down. Same handling — the caller can't do anything useful with it
        and must not fail the request over it. */
-    console.error(`email to ${to} failed to send:`, cause);
+    console.error(`email to ${recipients} failed to send:`, cause);
     return false;
   }
 }

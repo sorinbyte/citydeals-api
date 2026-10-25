@@ -137,6 +137,15 @@ const schema = z.object({
   MARKETING_BASE_URL: z.string().url().optional(),
 
   /*
+    Who hears about a new partner lead from the /parteneri form, comma-separated. In env for the
+    EMAIL_FROM reason — an address is a hostname wearing a hat.
+
+    Optional: unset, the lead is still saved (admin → Lead-uri) and the boot log says nobody gets
+    mailed. Losing the email is annoying; losing the lead would be the real bug.
+  */
+  LEAD_NOTIFY_EMAILS: z.string().optional(),
+
+  /*
     Resend. The only mail path there is.
 
     Required rather than optional-with-a-fallback on purpose. The optional shape means a missing key
@@ -316,3 +325,9 @@ export const corsAllowedOrigins = new Set(
     .map((origin) => origin.trim().replace(/\/+$/, ""))
     .filter(Boolean),
 );
+
+/* The lead notification list, parsed once. Same split-and-trim as the CORS list above. */
+export const leadNotifyEmails = (parsed.data.LEAD_NOTIFY_EMAILS ?? "")
+  .split(",")
+  .map((address) => address.trim())
+  .filter(Boolean);
