@@ -43,6 +43,8 @@ export type Deal = {
 
 export type MenuItem = {
   name: string;
+  /* ingredients / notes as the venue prints them. null for the many lines that are just name + price */
+  description: string | null;
   /* The VENUE'S OWN price, undiscounted. The discount happens at the till. */
   priceMinor: number;
   currency: string;

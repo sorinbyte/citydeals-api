@@ -367,8 +367,8 @@ const detailColumns = sql`
                      json_build_object(
                        'title', ms.title,
                        'items', COALESCE((SELECT json_agg(json_build_object(
-                                   'name', mi.name, 'priceMinor', mi.price_minor,
-                                   'currency', mi.currency
+                                   'name', mi.name, 'description', mi.description,
+                                   'priceMinor', mi.price_minor, 'currency', mi.currency
                                  ) ORDER BY mi.sort_order)
                                  FROM menu_items mi
                                  WHERE mi.section_id = ms.id AND mi.is_available), '[]'::json)
