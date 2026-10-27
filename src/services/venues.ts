@@ -762,6 +762,14 @@ export type CreateVenueInput = UpdateVenueInput & {
   partnerId: string | null;
 };
 
+/* A plain lunch-to-evening restaurant week, every day 10:00–22:00. Where new venues start — see
+   createVenueForAdmin. Restaurants are the bulk of the catalogue, so that's what it's shaped for. */
+const DEFAULT_WEEK_HOURS: VenueHoursWindow[] = [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({
+  weekday,
+  opensAt: "10:00",
+  closesAt: "22:00",
+}));
+
 export type CreateVenueResult =
   | { ok: true; venue: AdminVenue }
   | {
@@ -775,6 +783,10 @@ export type CreateVenueResult =
   Everything that isn't passed uses the column default — `rating` stays null, `rating_count` 0,
   `is_new` false, `menu_kind` null. Those are earned later (or set by an editor), not
   invented at creation.
+
+  The one exception is opening hours: a new venue starts on DEFAULT_WEEK_HOURS so the Program tab
+  opens on something to tweak rather than seven empty days. They're a guess until someone confirms
+  them with the venue — fine, because the venue is created unpublished.
 
   ⚠️ is_published is written explicitly rather than left to the column, because the column defaults
   to TRUE. A venue created here has no photos and no offers yet, so it would go live in the app as a
@@ -817,6 +829,13 @@ export async function createVenueForAdmin(input: CreateVenueInput): Promise<Crea
         `);
 
         if ((linked.rowCount ?? 0) !== subcategoryKeys.length) throw new SubcategoryMismatch();
+      }
+
+      for (const window of DEFAULT_WEEK_HOURS) {
+        await tx.execute(sql`
+          INSERT INTO opening_hours (venue_id, weekday, opens_at, closes_at)
+          VALUES (${row.id}, ${window.weekday}, ${window.opensAt}::time, ${window.closesAt}::time)
+        `);
       }
 
       return null;
@@ -1519,10 +1538,8 @@ export async function setDealActiveForPartner(
   and every row is derived from array position anyway. Nothing references an opening_hours id, so
   regenerating them costs nothing.
 
-  ⚠️ NOT scoped to a user, deliberately. This one takes a plain venueId because the route gate has
-  already proved the caller owns it, and because admin will want the same function the day it grows
-  an hours editor — it has none today, which is exactly why partners can't have their hours fixed
-  for them.
+  ⚠️ NOT scoped to a user, deliberately. It takes a plain venueId because both callers have already
+  settled access: the partner route gate proves ownership, and admin is the platform owner.
 
   ⚠️ A window with closesAt <= opensAt is legal and means it runs past midnight. Nothing here
   reorders, splits or "corrects" such a row; lib/hours.ts is built to read them and the whole

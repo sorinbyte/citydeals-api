@@ -31,6 +31,7 @@ import {
   getVenueForAdmin,
   listVenuesForAdmin,
   reorderVenuePhotos,
+  replaceVenueHours,
   replaceVenueMenu,
   updateDeal,
   updateVenueForAdmin,
@@ -291,6 +292,29 @@ const dealFields = {
 const photoOrderBody = z.object({
   photoIds: z.array(z.string().uuid()).max(50),
 });
+
+/*
+  The whole opening schedule. A second copy of the partner route's schema, on purpose — same reason
+  menuBody is duplicated over there: the two route files don't share a gate.
+
+  ⚠️ No "closesAt after opensAt" rule. closesAt <= opensAt is how a window past midnight is stored
+  (10:00–01:00 is one Friday row), and lib/hours.ts depends on it. 21 = three windows a day.
+*/
+const hoursBody = z
+  .object({
+    windows: z
+      .array(
+        z.object({
+          /* ISO-8601: 1 = Monday … 7 = Sunday, matching EXTRACT(ISODOW). */
+          weekday: z.number().int().min(1).max(7),
+          /* the regex is what keeps a bad string off the ::time cast — a 400, not a 500 */
+          opensAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+          closesAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        }),
+      )
+      .max(21),
+  })
+  .strict();
 
 /*
   A whole price list.
@@ -910,6 +934,22 @@ export const adminRoute = new Hono<AdminEnv>()
     item id, so replacing it wholesale is far less machinery than section and item CRUD plus two
     kinds of reordering — see replaceVenueMenu for the full reasoning and the caveat.
   */
+  /* The week's hours, replaced wholesale — same service the partner route uses. */
+  .patch("/venues/:id/hours", async (c) => {
+    const id = idParam.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    const parsed = hoursBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_BODY", details: parsed.error.flatten() } }, 400);
+    }
+
+    const result = await replaceVenueHours(id.data, parsed.data.windows);
+    if (!result.ok) return c.json({ error: { code: result.reason } }, 404);
+
+    return c.json(result.venue);
+  })
+
   .patch("/venues/:id/menu", async (c) => {
     const id = idParam.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
