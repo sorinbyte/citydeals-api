@@ -128,6 +128,15 @@ export const venues = pgTable(
     tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
     isNew: boolean("is_new").notNull().default(false),
     /*
+      An editorial pin on the home "Trending" row: 1 leads it, 2 comes next, null means "order it
+      by real usage like everyone else". Set by the platform owner in admin, never by a partner —
+      a venue that could pin itself would be buying the front page.
+
+      Kept deliberately rare. Pinned venues sit ahead of the redemption ranking, so every pin is
+      a slot that real usage doesn't get. Admin only — never in a public projection.
+    */
+    featuredRank: smallint("featured_rank"),
+    /*
       Which word the price list goes by, or NULL for venues that don't have one. Deliberately per
       venue rather than derived from the category — a croitorie and a phone-repair shop genuinely
       do have a priced service list, they just don't have one seeded yet.

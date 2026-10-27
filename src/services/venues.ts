@@ -90,11 +90,16 @@ const ORDER_BY: Record<VenueSort, SQL> = {
     Ties break on rating, so with no redemptions yet this row reads as the top-rated order — which
     is the honest answer to "what's trending" before anyone has redeemed anything, not a bug.
 
+    Editorial pins (featured_rank, set in admin) go ahead of all of it, in rank order. That's the
+    one way to put a brand-new venue on the row — it has no redemptions and no rating, so it would
+    otherwise sort last. Everything unpinned is still ranked on real usage.
+
     ⚠️ A correlated subquery per row. Fine over tens of venues; the moment this list is thousands it
     wants a materialised count refreshed on a schedule rather than a scan per row. The index that
     makes it survivable until then is (venue_id, consumed_at).
   */
   trending: sql`
+    v.featured_rank ASC NULLS LAST,
     (SELECT count(*) FROM redemptions r
       WHERE r.venue_id = v.id
         AND r.consumed_at >= now() - interval '30 days') DESC,
@@ -494,6 +499,7 @@ const isoTimestamp = (column: ReturnType<typeof sql>) => sql`to_json(${column})#
    venues.partner_id in db/schema/catalogue.ts. */
 const adminColumns = sql`
   v.is_published,
+  v.featured_rank,
   ${isoTimestamp(sql`v.created_at`)} AS created_at,
   ${isoTimestamp(sql`v.updated_at`)} AS updated_at,
   (SELECT json_build_object('id', p.id, 'companyName', p.company_name)
@@ -548,6 +554,7 @@ const adminColumns = sql`
 
 type AdminVenueRow = DetailRow & {
   is_published: boolean;
+  featured_rank: number | null;
   created_at: string;
   updated_at: string;
   partner: { id: string; companyName: string } | null;
@@ -588,6 +595,7 @@ function toAdminVenue(row: AdminVenueRow): AdminVenue {
     menuSections: row.admin_menu_sections,
     weekHours: row.week_hours,
     isPublished: row.is_published,
+    featuredRank: row.featured_rank,
     partner: row.partner,
     subcategoryKeys: row.subcategory_keys,
     createdAt: row.created_at,
@@ -750,6 +758,8 @@ export type UpdateVenueInput = {
   subcategoryKeys: string[];
   /* Replaces the list when given; undefined leaves the stored tags as they are. */
   tags?: string[];
+  /* The Trending pin. undefined leaves it alone; null unpins. */
+  featuredRank?: number | null;
 };
 
 export type CreateVenueInput = UpdateVenueInput & {
@@ -907,6 +917,9 @@ export async function updateVenueForAdmin(
             is_published = ${input.isPublished},
             -- null (no tags sent) keeps what's there; see the note on venueBody.tags
             tags         = COALESCE(${tags === undefined ? null : sql.param(tags)}::text[], tags),
+            -- can't COALESCE this one like tags: null is a real value here (unpin), so "not sent"
+            -- has to be decided in JS and the column written back to itself
+            featured_rank = ${input.featuredRank === undefined ? sql`featured_rank` : sql`${input.featuredRank}`},
             updated_at   = now()
         WHERE id = ${id}
         RETURNING id

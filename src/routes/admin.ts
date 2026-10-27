@@ -185,6 +185,9 @@ const venueBody = z.object({
     field existed can still save a venue without wiping its tags. Replaces the whole list when sent.
   */
   tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
+  /* The Trending pin. Optional for the same reason as tags — an older admin build saving a venue
+     must not unpin it. null unpins. */
+  featuredRank: z.number().int().min(1).max(20).nullable().optional(),
 });
 
 /*

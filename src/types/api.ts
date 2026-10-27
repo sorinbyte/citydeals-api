@@ -407,6 +407,8 @@ export type AdminVenue = Omit<VenueDetail, "deals" | "photos" | "menu"> & {
   */
   weekHours: VenueHoursWindow[];
   isPublished: boolean;
+  /* The home "Trending" pin — 1 leads the row, null is unpinned. Admin only. */
+  featuredRank: number | null;
   /* Null is a real state, not missing data — venues get created before the company behind them
      exists, and all 30 seeded ones have no partner at all. */
   partner: { id: string; companyName: string } | null;
