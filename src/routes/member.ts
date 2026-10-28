@@ -16,6 +16,7 @@ import {
   updateMemberProfile,
   verifyPhoneCode,
 } from "@/services/member-auth";
+import { getPendingRating, rateRedemption, skipRating } from "@/services/ratings";
 import {
   getRedemptionStatusForSession,
   issueRedemption,
@@ -73,6 +74,19 @@ const contactsMatchBody = z
   .strict();
 
 const followBody = z.object({ memberIds: z.array(z.string().uuid()).min(1).max(200) }).strict();
+
+/* Comment is optional and short — it's a note to us and the venue, not a review site. Blank → null. */
+const ratingBody = z
+  .object({
+    stars: z.number().int().min(1).max(5),
+    comment: z
+      .string()
+      .trim()
+      .max(500)
+      .nullish()
+      .transform((v) => v || null),
+  })
+  .strict();
 
 /*
   The optional half of a member: what they're called and where to reach them.
@@ -425,6 +439,48 @@ export const memberRoute = new Hono<MemberEnv>()
     }
 
     return c.json(result.redemption, 201);
+  })
+
+  /* ----------------------------------------------------------------------------------------- */
+
+  /*
+    Rating a used offer — asked on the member's screen the moment it's validated, and once more on
+    the next launch (GET /ratings/pending). Rules in services/ratings.ts.
+
+    404 for anything that isn't this member's consumed redemption, without saying which — same
+    answer for "not yours" and "doesn't exist".
+  */
+  .put("/redemptions/:id/rating", requireMember, async (c) => {
+    const id = idParam.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    const parsed = ratingBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_BODY", details: parsed.error.flatten() } }, 400);
+    }
+
+    const result = await rateRedemption(
+      c.get("member").id,
+      id.data,
+      parsed.data.stars,
+      parsed.data.comment,
+    );
+    if (result === "not_found") return c.json({ error: { code: "NOT_FOUND" } }, 404);
+    return c.body(null, 204);
+  })
+
+  .post("/redemptions/:id/rating/skip", requireMember, async (c) => {
+    const id = idParam.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    const result = await skipRating(c.get("member").id, id.data);
+    if (result === "not_found") return c.json({ error: { code: "NOT_FOUND" } }, 404);
+    return c.body(null, 204);
+  })
+
+  /* `item` null when there's nothing to ask about — the common case, so it's a 200, not a 404. */
+  .get("/ratings/pending", requireMember, async (c) => {
+    return c.json({ item: await getPendingRating(c.get("member").id) });
   })
 
   /* ----------------------------------------------------------------------------------------- */

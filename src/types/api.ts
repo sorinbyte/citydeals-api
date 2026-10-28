@@ -585,6 +585,18 @@ export type ContactMatch = { phone: string; memberId: string; following: boolean
 export type FollowedMember = { id: string; name: string | null; followedAt: string };
 
 /*
+  A used offer the member hasn't rated yet — the app's second (and last) ask, on launch. See
+  services/ratings.ts for why it's only ever the latest one.
+*/
+export type PendingRating = {
+  redemptionId: string;
+  venueName: string;
+  venueSlug: string;
+  dealTitle: string;
+  usedAt: string;
+};
+
+/*
   What the member's phone shows at the counter.
 
   `url` is the whole QR payload, composed server-side from REDEEM_BASE_URL — the app never builds

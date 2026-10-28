@@ -102,6 +102,9 @@ app.get("/", (c) =>
       "GET /v1/member/favourites/ids (bearer)",
       "PUT|DELETE /v1/member/favourites/:venueId (bearer)",
       "POST /v1/member/redemptions (bearer)",
+      "PUT /v1/member/redemptions/:id/rating (bearer)",
+      "POST /v1/member/redemptions/:id/rating/skip (bearer)",
+      "GET /v1/member/ratings/pending (bearer)",
       "GET|DELETE /v1/member/redemptions/:id (bearer)",
       /* The venue's side of a redemption. Public by design — a waiter scans with whatever phone is
          behind the bar and has no account to sign into. What guards it is the 128-bit token in the
