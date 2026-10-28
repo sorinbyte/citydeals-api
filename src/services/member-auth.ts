@@ -65,12 +65,15 @@ export const TRIAL_DAYS = 14;
 export function normalisePhone(input: string): string | null {
   const digits = input.replace(/\D/g, "");
 
-  /* Strip whichever prefix they used down to the nine national digits. */
+  /* Strip whichever prefix they used down to the nine national digits. "0040…" is the
+     international dialling prefix — plenty of older address books store numbers that way, and
+     contact matching can't ask anyone to retype. */
   let national: string | null = null;
   if (digits.length === 9) national = digits;
   else if (digits.length === 10 && digits.startsWith("0")) national = digits.slice(1);
   else if (digits.length === 11 && digits.startsWith("40")) national = digits.slice(2);
   else if (digits.length === 12 && digits.startsWith("040")) national = digits.slice(3);
+  else if (digits.length === 13 && digits.startsWith("0040")) national = digits.slice(4);
 
   if (!national || !national.startsWith("7")) return null;
   return `+40${national}`;

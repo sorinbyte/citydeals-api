@@ -99,6 +99,13 @@
       "when": 1793195311255,
       "tag": "0013_member_referrals",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793202519895,
+      "tag": "0014_member_follows",
+      "breakpoints": true
     }
   ]
 }

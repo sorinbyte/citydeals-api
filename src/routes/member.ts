@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { allowRequest, clientIp } from "@/lib/rate-limit";
 import { deliverPhoneCode, maskPhone } from "@/lib/sms";
 import { addFavourite, listFavouriteIds, removeFavourite } from "@/services/favourites";
+import { follow, listFollowing, matchContacts, unfollow } from "@/services/friends";
 import {
   destroyMemberSession,
   findMemberBySessionToken,
@@ -64,6 +65,14 @@ const issueBody = z.object({ dealId: z.string().uuid() }).strict();
 
 /* Loose length on purpose — normaliseCode strips the spaces and dashes people type. */
 const referralRedeemBody = z.object({ code: z.string().trim().min(4).max(24) }).strict();
+
+/* 3000 is a big address book with room to spare. Loose per-number length — normalisePhone sorts
+   out which are real Romanian mobiles, and the rest are just dropped. */
+const contactsMatchBody = z
+  .object({ phones: z.array(z.string().trim().min(6).max(24)).max(3000) })
+  .strict();
+
+const followBody = z.object({ memberIds: z.array(z.string().uuid()).min(1).max(200) }).strict();
 
 /*
   The optional half of a member: what they're called and where to reach them.
@@ -340,6 +349,51 @@ export const memberRoute = new Hono<MemberEnv>()
       );
     }
     return c.json(result.member);
+  })
+
+  /* ----------------------------------------------------------------------------------------- */
+
+  /*
+    Which of the member's contacts are on Crunch. The numbers are compared and dropped — never
+    stored or logged (services/friends.ts), and that's a promise in the privacy policy.
+
+    ⚠️ Rate-limited hard because this is the one endpoint that answers "is this number a member".
+    Six an hour covers opening the Prieteni tab and the invite screen with room to spare; scanning
+    the member list through it does not fit.
+  */
+  .post("/contacts/match", requireMember, async (c) => {
+    const parsed = contactsMatchBody.safeParse(await c.req.json().catch(() => null));
+    /* No details on this one — a zod error would quote the numbers back, and they go nowhere. */
+    if (!parsed.success) return c.json({ error: { code: "INVALID_BODY" } }, 400);
+
+    const member = c.get("member");
+    if (!allowRequest(`contacts-match:member:${member.id}`, 6, 60 * 60_000)) {
+      return c.json({ error: { code: "TOO_MANY_REQUESTS" } }, 429);
+    }
+
+    return c.json({ items: await matchContacts(member.id, parsed.data.phones) });
+  })
+
+  .get("/following", requireMember, async (c) => {
+    return c.json({ items: await listFollowing(c.get("member").id) });
+  })
+
+  /* Several at once, since the sheet confirms everyone ticked together. Idempotent. */
+  .post("/follows", requireMember, async (c) => {
+    const parsed = followBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_BODY", details: parsed.error.flatten() } }, 400);
+    }
+    await follow(c.get("member").id, parsed.data.memberIds);
+    return c.body(null, 204);
+  })
+
+  .delete("/follows/:memberId", requireMember, async (c) => {
+    const memberId = idParam.safeParse(c.req.param("memberId"));
+    if (!memberId.success) return c.json({ error: { code: "INVALID_ID" } }, 400);
+
+    await unfollow(c.get("member").id, memberId.data);
+    return c.body(null, 204);
   })
 
   /* ----------------------------------------------------------------------------------------- */

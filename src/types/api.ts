@@ -563,7 +563,7 @@ export type MemberSession = {
   a build that composes its own hostname keeps pointing at a dead one forever.
 
   `friends` is only people who actually signed up with the code. Who the member messaged isn't
-  known here and isn't meant to be: contacts never leave the phone.
+  known here and isn't meant to be.
 */
 export type ReferralSummary = {
   code: string;
@@ -574,6 +574,15 @@ export type ReferralSummary = {
   /* Whether this member can still type in a friend's code: never used one, account under a week old. */
   canRedeemCode: boolean;
 };
+
+/*
+  One of the member's contacts who's on Crunch. `phone` is exactly what the app sent, so it can put
+  its own contact name next to it — the server never returns a name here (services/friends.ts).
+*/
+export type ContactMatch = { phone: string; memberId: string; following: boolean };
+
+/* Someone the member follows. `name` is shortened server-side to "Teo Z.", null if they never gave one. */
+export type FollowedMember = { id: string; name: string | null; followedAt: string };
 
 /*
   What the member's phone shows at the counter.
