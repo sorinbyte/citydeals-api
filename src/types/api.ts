@@ -581,6 +581,19 @@ export type ReferralSummary = {
 */
 export type ContactMatch = { phone: string; memberId: string; following: boolean };
 
+/* One rating in the Prieteni feed. `id` is the redemption's — one rating per visit. */
+export type FeedItem = {
+  id: string;
+  memberId: string;
+  memberName: string | null;
+  venueName: string;
+  venueSlug: string;
+  dealTitle: string;
+  stars: number;
+  comment: string | null;
+  ratedAt: string;
+};
+
 /* Someone the member follows. `name` is shortened server-side to "Teo Z.", null if they never gave one. */
 export type FollowedMember = { id: string; name: string | null; followedAt: string };
 

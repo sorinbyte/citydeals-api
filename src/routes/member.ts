@@ -5,7 +5,7 @@ import { env } from "@/lib/env";
 import { allowRequest, clientIp } from "@/lib/rate-limit";
 import { deliverPhoneCode, maskPhone } from "@/lib/sms";
 import { addFavourite, listFavouriteIds, removeFavourite } from "@/services/favourites";
-import { follow, listFollowing, matchContacts, unfollow } from "@/services/friends";
+import { follow, listFeed, listFollowing, matchContacts, unfollow } from "@/services/friends";
 import {
   destroyMemberSession,
   findMemberBySessionToken,
@@ -390,6 +390,11 @@ export const memberRoute = new Hono<MemberEnv>()
 
   .get("/following", requireMember, async (c) => {
     return c.json({ items: await listFollowing(c.get("member").id) });
+  })
+
+  /* Ratings from people this member follows — who can see them is decided in listFeed. */
+  .get("/feed", requireMember, async (c) => {
+    return c.json({ items: await listFeed(c.get("member").id) });
   })
 
   /* Several at once, since the sheet confirms everyone ticked together. Idempotent. */

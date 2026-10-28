@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/db/client";
 import { normalisePhone } from "@/services/member-auth";
-import type { ContactMatch, FollowedMember } from "@/types/api";
+import type { ContactMatch, FeedItem, FollowedMember } from "@/types/api";
 
 /*
   The Prieteni tab: which of your contacts are on Crunch, and who you follow.
@@ -98,4 +98,61 @@ export async function unfollow(memberId: string, followeeId: string): Promise<vo
     DELETE FROM follows
     WHERE follower_member_id = ${memberId} AND followee_member_id = ${followeeId}
   `);
+}
+
+/* How far back the feed reaches, and how much of it. A rating from last spring isn't news. */
+const FEED_DAYS = 90;
+const FEED_LIMIT = 50;
+
+/*
+  The Prieteni feed: ratings from people this member follows, newest first.
+
+  ⚠️ Visible to ANYONE who follows the rater — the product call (NeoTaste's model), made knowing a
+  follow needs only the phone number. The privacy policy says so. If that ever changes to mutual
+  follows or a "private" switch, it's the WHERE below and nothing else.
+
+  Skipped asks (stars null) aren't ratings and never appear. The rater's name is shortened like
+  everywhere else; the app prefers the name in its own contacts anyway.
+*/
+export async function listFeed(memberId: string): Promise<FeedItem[]> {
+  const result = await db.execute(sql`
+    SELECT rr.redemption_id AS id, m.id AS member_id, m.name AS member_name,
+      v.name AS venue_name, v.slug AS venue_slug, d.title AS deal_title,
+      rr.stars, rr.comment, to_json(rr.created_at)#>>'{}' AS rated_at
+    FROM follows f
+    JOIN redemption_ratings rr ON rr.member_id = f.followee_member_id
+    JOIN members m ON m.id = rr.member_id
+    JOIN redemptions r ON r.id = rr.redemption_id
+    JOIN venues v ON v.id = rr.venue_id
+    JOIN deals d ON d.id = r.deal_id
+    WHERE f.follower_member_id = ${memberId}
+      AND rr.stars IS NOT NULL
+      AND v.is_published
+      AND rr.created_at > now() - ${FEED_DAYS} * interval '1 day'
+    ORDER BY rr.created_at DESC
+    LIMIT ${FEED_LIMIT}
+  `);
+
+  type Row = {
+    id: string;
+    member_id: string;
+    member_name: string | null;
+    venue_name: string;
+    venue_slug: string;
+    deal_title: string;
+    stars: number;
+    comment: string | null;
+    rated_at: string;
+  };
+  return (result.rows as Row[]).map((row) => ({
+    id: row.id,
+    memberId: row.member_id,
+    memberName: shortName(row.member_name),
+    venueName: row.venue_name,
+    venueSlug: row.venue_slug,
+    dealTitle: row.deal_title,
+    stars: row.stars,
+    comment: row.comment,
+    ratedAt: row.rated_at,
+  }));
 }
