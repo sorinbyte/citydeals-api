@@ -92,6 +92,8 @@ app.get("/", (c) =>
       "POST /v1/member/auth/verify",
       "GET /v1/member/me (bearer)",
       "POST /v1/member/trial (bearer)",
+      "GET /v1/member/referral (bearer)",
+      "POST /v1/member/referral/redeem (bearer)",
       "GET /v1/member/favourites (bearer)",
       "GET /v1/member/favourites/ids (bearer)",
       "PUT|DELETE /v1/member/favourites/:venueId (bearer)",

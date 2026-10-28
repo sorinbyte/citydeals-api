@@ -21,6 +21,7 @@ import {
   listCooldowns,
   voidRedemption,
 } from "@/services/redemptions";
+import { getReferralSummary, redeemReferralCode } from "@/services/referrals";
 import { listFavouriteVenues } from "@/services/venues";
 import type { MemberProfile } from "@/types/api";
 
@@ -60,6 +61,9 @@ const verifyBody = z
   .strict();
 
 const issueBody = z.object({ dealId: z.string().uuid() }).strict();
+
+/* Loose length on purpose — normaliseCode strips the spaces and dashes people type. */
+const referralRedeemBody = z.object({ code: z.string().trim().min(4).max(24) }).strict();
 
 /*
   The optional half of a member: what they're called and where to reach them.
@@ -292,6 +296,50 @@ export const memberRoute = new Hono<MemberEnv>()
     const member = await startTrial(c.get("member").id);
     if (!member) return c.json({ error: { code: "NOT_FOUND" } }, 404);
     return c.json(member);
+  })
+
+  /* ----------------------------------------------------------------------------------------- */
+
+  /*
+    The invite screen: this member's code and link, and who joined with it.
+
+    503 rather than a link on some default host when MARKETING_BASE_URL isn't set — same call as the
+    waitlist. A shared link pointing nowhere can't be taken back out of people's chats.
+  */
+  .get("/referral", requireMember, async (c) => {
+    const linkBase = env.MARKETING_BASE_URL;
+    if (!linkBase) return c.json({ error: { code: "REFERRAL_UNCONFIGURED" } }, 503);
+
+    const summary = await getReferralSummary(c.get("member").id, linkBase);
+    if (!summary) return c.json({ error: { code: "NOT_FOUND" } }, 404);
+    return c.json(summary);
+  })
+
+  /*
+    A new member typing in the friend's code. Both get a month — the rules are in services/referrals.
+
+    ⚠️ Rate-limited because a code is eight characters and an endpoint that says "valid" or "not"
+    is a guessing machine otherwise. Ten an hour is plenty for typos.
+  */
+  .post("/referral/redeem", requireMember, async (c) => {
+    const parsed = referralRedeemBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: { code: "INVALID_BODY", details: parsed.error.flatten() } }, 400);
+    }
+
+    const member = c.get("member");
+    if (!allowRequest(`referral-redeem:member:${member.id}`, 10, 60 * 60_000)) {
+      return c.json({ error: { code: "TOO_MANY_REQUESTS" } }, 429);
+    }
+
+    const result = await redeemReferralCode(member.id, parsed.data.code);
+    if (!result.ok) {
+      return c.json(
+        { error: { code: result.reason } },
+        result.reason === "REFERRAL_CODE_INVALID" ? 404 : 409,
+      );
+    }
+    return c.json(result.member);
   })
 
   /* ----------------------------------------------------------------------------------------- */

@@ -44,7 +44,7 @@ const MAX_CODE_ATTEMPTS = 5;
 const MEMBER_SESSION_TTL_DAYS = 180;
 
 /* Ours, not a payment provider's, which is why it can exist before subscriptions do. */
-const TRIAL_DAYS = 14;
+export const TRIAL_DAYS = 14;
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -359,6 +359,11 @@ export async function startTrial(memberId: string): Promise<MemberProfile | null
     WHERE id = ${memberId} AND trial_started_at IS NULL
   `);
 
+  return findMemberProfile(memberId);
+}
+
+/* The member as /me returns them — for services that changed something and owe the app the result. */
+export async function findMemberProfile(memberId: string): Promise<MemberProfile | null> {
   const result = await db.execute(sql`
     SELECT ${profileColumns} FROM members m WHERE m.id = ${memberId} LIMIT 1
   `);

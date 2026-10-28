@@ -557,6 +557,25 @@ export type MemberSession = {
 };
 
 /*
+  The invite screen: the member's own link, and what it has earned them.
+
+  ⚠️ `link` is composed server-side from MARKETING_BASE_URL, same rule as IssuedRedemption.url —
+  a build that composes its own hostname keeps pointing at a dead one forever.
+
+  `friends` is only people who actually signed up with the code. Who the member messaged isn't
+  known here and isn't meant to be: contacts never leave the phone.
+*/
+export type ReferralSummary = {
+  code: string;
+  link: string;
+  /* Free months the member got for inviting. Months a friend got don't count — those are theirs. */
+  monthsEarned: number;
+  friends: Array<{ id: string; name: string | null; joinedAt: string }>;
+  /* Whether this member can still type in a friend's code: never used one, account under a week old. */
+  canRedeemCode: boolean;
+};
+
+/*
   What the member's phone shows at the counter.
 
   `url` is the whole QR payload, composed server-side from REDEEM_BASE_URL — the app never builds
@@ -708,7 +727,14 @@ export type ApiError = {
       | "PIN_LOCKED"
       /* The venue has no PIN configured, so it cannot confirm anything yet. An onboarding gap, not
          a mistake by whoever is holding the phone — the copy has to say so. */
-      | "PIN_NOT_SET";
+      | "PIN_NOT_SET"
+
+      /* Invite codes. INVALID is a code that doesn't exist; NOT_ELIGIBLE is a real code this member
+         can't use — their own, a second one, or an account past the first week. */
+      | "REFERRAL_CODE_INVALID"
+      | "REFERRAL_NOT_ELIGIBLE"
+      /* The API has no MARKETING_BASE_URL, so there's no host to build an invite link on. */
+      | "REFERRAL_UNCONFIGURED";
     /* Field-level detail for INVALID_QUERY / INVALID_BODY. Developer-facing, never shown to a
        member. */
     details?: unknown;

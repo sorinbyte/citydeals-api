@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
+  boolean,
   check,
   index,
   pgEnum,
@@ -277,12 +278,56 @@ export const members = pgTable(
     /* Null means they verified and never came back — which is exactly the segment worth knowing
        about, so it's a signal rather than missing data. */
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+
+    /*
+      The member's invite code, the bit after /p/ in their invite link. Null until they first open
+      the invite screen — minted then by services/referrals.ts, not here.
+
+      ⚠️ Random, never derived from the id or the phone. A code you can compute from something else
+      is a code anyone can claim a free month with.
+    */
+    referralCode: text("referral_code"),
     ...timestamps,
   },
   (t) => [
     uniqueIndex("members_phone_key").on(t.phone),
+    uniqueIndex("members_referral_code_key").on(t.referralCode),
     // drives the "trial expiră în 3z" segment on the admin members page
     index("members_trial_ends_idx").on(t.trialEndsAt),
+  ],
+);
+
+/*
+  Who invited whom. One row per new member who signed up with someone's code.
+
+  ⚠️ invitee_member_id is UNIQUE, and that's the whole "one free month per phone number" rule —
+  a member row only exists for a verified number, so a person can be somebody's invitee once, ever.
+
+  ⚠️ For the future GDPR anonymisation job: keep these rows and clear the phone on the member. Delete
+  the row and a number that re-registers can claim the free month again.
+
+  The months themselves aren't stored here — they're added straight onto members.trial_ends_at,
+  because the trial is the only entitlement there is. When subscriptions land, the rewards want a
+  proper ledger; inviter_rewarded is what that ledger gets backfilled from.
+*/
+export const referrals = pgTable(
+  "referrals",
+  {
+    id: id(),
+    inviterMemberId: uuid("inviter_member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "restrict" }),
+    inviteeMemberId: uuid("invitee_member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "restrict" }),
+    /* False when the inviter had hit the yearly cap — the friend still got their month, they didn't. */
+    inviterRewarded: boolean("inviter_rewarded").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("referrals_invitee_key").on(t.inviteeMemberId),
+    // the invite screen's list and the yearly cap both read by inviter
+    index("referrals_inviter_idx").on(t.inviterMemberId, t.createdAt),
   ],
 );
 
